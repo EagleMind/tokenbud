@@ -1,0 +1,84 @@
+# Builds the desktop app for Windows, macOS and Linux, and attaches the installers to a draft
+# GitHub release. Trigger: push a version tag (git tag v0.1.0 && git push origin v0.1.0), or run it
+# by hand from the Actions tab. Review the draft, then publish it.
+#
+# The builds are unsigned: Windows SmartScreen and macOS Gatekeeper will warn on first launch.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macOS (Apple Silicon)
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - name: macOS (Intel)
+            runner: macos-latest
+            target: x86_64-apple-darwin
+          - name: Linux
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev build-essential
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # `tauri build` runs the frontend build itself (beforeBuildCommand in apps/desktop/tauri.conf.json).
+      - name: Build installers
+        working-directory: desktop
+        run: npm run bundle -- --target ${{ matrix.target }}
+
+      - name: Attach to the draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('draft-{0}', github.run_number) }}
+          name: tokenbud ${{ github.ref_type == 'tag' && github.ref_name || format('draft {0}', github.run_number) }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            target/${{ matrix.target }}/release/bundle/msi/*.msi
+            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
+            target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage

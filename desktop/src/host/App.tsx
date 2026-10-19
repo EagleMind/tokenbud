@@ -20,7 +20,8 @@ export function HostApp({ onSettings }: { onSettings: (section: SettingsSection)
 
   return (
     <div className="h-full overflow-y-auto">
-      <main className="mx-auto w-full max-w-2xl space-y-5 px-8 py-7">
+      {/* One column in a narrow window; side by side once there's room (the window keeps its size). */}
+      <main className="mx-auto w-full max-w-5xl px-6 py-7 sm:px-8">
         <div className="flex items-center justify-between">
           <h1 className="font-display text-2xl font-semibold">Share your agent</h1>
           <label className="flex cursor-pointer items-center gap-3 text-sm font-medium">
@@ -28,9 +29,13 @@ export function HostApp({ onSettings }: { onSettings: (section: SettingsSection)
             <Switch checked={state.status !== "stopped"} onCheckedChange={(on) => call("set_sharing", { on })} aria-label="Share" />
           </label>
         </div>
-        <Credentials state={state} />
-        <Seats state={state} />
-        <Summary state={state} onSettings={onSettings} />
+        <div className="mt-5 grid items-start gap-5 min-[900px]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+          <div className="space-y-5">
+            <Credentials state={state} />
+            <Summary state={state} onSettings={onSettings} />
+          </div>
+          <Seats state={state} />
+        </div>
       </main>
     </div>
   );
