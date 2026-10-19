@@ -4,7 +4,17 @@ All notable changes to tokenbud. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-10-19
+## [0.1.0] - 2026-10-19
+
+First release.
+
+- One desktop app with two modes: share your agent with an ID and password, or connect to someone else's.
+- A web client served by the relay, so guests need nothing installed.
+- Seats (how many people at once) and a reserve (an hourly limit, and pausing while you use it yourself).
+- Local models (Ollama, LM Studio) and providers with your own API key: Anthropic, OpenAI, Google Gemini, Mistral, Groq, DeepSeek, xAI, OpenRouter, or any OpenAI-compatible server.
+- Local-first memory: facts and chats stay on the guest's device, and the agent suggests facts to remember.
+- `tokenbud mcp`: use a shared agent from your own coding agent.
+- Light and dark themes. Set your own relay in Settings.
 
 ### Security
 - The relay locks out wrong passwords per caller (IP address), not per host, so one person guessing can't block everyone else.
@@ -38,18 +48,5 @@ All notable changes to tokenbud. The format follows [Keep a Changelog](https://k
 - Tests for the relay, the web client and the shared memory behaviour.
 - `CONTRIBUTING.md`.
 
-## [0.1.0] - 2026-10-19
-
-First release.
-
-- One desktop app with two modes: share your agent with an ID and password, or connect to someone else's.
-- A web client served by the relay, so guests need nothing installed.
-- Seats (how many people at once) and a reserve (an hourly limit, and pausing while you use it yourself).
-- Local models (Ollama, LM Studio) and providers with your own API key: Anthropic, OpenAI, Google Gemini, Mistral, Groq, DeepSeek, xAI, OpenRouter, or any OpenAI-compatible server.
-- Local-first memory: facts and chats stay on the guest's device, and the agent suggests facts to remember.
-- `tokenbud mcp`: use a shared agent from your own coding agent.
-- Light and dark themes. Set your own relay in Settings.
-
-[Unreleased]: https://github.com/EagleMind/tokenbud/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/EagleMind/tokenbud/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/EagleMind/tokenbud/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/EagleMind/tokenbud/releases/tag/v0.1.0

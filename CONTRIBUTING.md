@@ -44,7 +44,7 @@ cd relay && npx tsc --noEmit && npm test
 Bump `version` in the root `Cargo.toml` (and `desktop/package.json`), add a section to `CHANGELOG.md`, then push a matching tag. The release workflow checks that the tag and version agree, builds the installers, and attaches them to a draft release to review and publish.
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 If the relay changed, deploy it too: `npm run deploy` in `relay/`.

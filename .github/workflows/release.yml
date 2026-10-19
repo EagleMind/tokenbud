@@ -1,5 +1,5 @@
 # Builds the desktop app for Windows, macOS and Linux, and attaches the installers to one draft
-# GitHub release. Trigger: push a version tag (git tag v0.1.1 && git push origin v0.1.1), or run it
+# GitHub release. Trigger: push a version tag (git tag v0.1.0 && git push origin v0.1.0), or run it
 # by hand from the Actions tab (that makes a "draft-<run>" release). Review the draft, then publish it.
 #
 # The builds are unsigned: Windows SmartScreen and macOS Gatekeeper will warn on first launch.

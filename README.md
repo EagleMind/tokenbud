@@ -162,7 +162,7 @@ cargo build --release
 The app is `target/release/tokenbud`. To make installers, run `npm run bundle` in `desktop/`. For a release on GitHub, push a version tag: the [release workflow](.github/workflows/release.yml) builds Windows, macOS and Linux installers and attaches them to a draft release.
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 ## Using it within the rules
