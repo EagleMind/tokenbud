@@ -4,9 +4,9 @@
 
 # tokenbud
 
-**Share your AI the way you share your screen.**
+**Lend your AI. Keep your keys.**
 
-Give someone an ID and a password, and they can chat with the model on your computer or your API account. Your keys and your files never leave your machine.
+You pay for a great AI, or you run one on your own computer. Now a friend, a teammate or a whole class wants a turn. tokenbud lets them, with an ID and a password. No key changes hands, no account is shared, and you can end it with one click.
 
 [![CI](https://github.com/EagleMind/tokenbud/actions/workflows/ci.yml/badge.svg)](https://github.com/EagleMind/tokenbud/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-5b63e6)](LICENSE)
@@ -24,17 +24,26 @@ Give someone an ID and a password, and they can chat with the model on your comp
 
 ---
 
-You have a good model running on your desktop, or an API key your teammates keep asking about. They don't need your login and you don't want to hand it over. You'd just like them to be able to *ask*.
+Most of the time, the AI you pay for sits idle. Meanwhile someone you know is stuck without one, or paying twice for something you already have. Until now, helping meant one of two bad choices: hand over your API key, the secret that unlocks your account and your bill, or set up a server and hope you got the security right.
 
-**tokenbud** turns that into a two-minute job. Open it, choose **Share my agent**, and read out an ID and a password. The other person types them into tokenbud, or into a web page with nothing to install, and chats with your AI. You decide how many people can use it at once and how much you lend, and you can disconnect anyone with one click. Nothing on your side opens a port; nothing on their side sees a key.
+**tokenbud is the third way.** Open it, press **Share my agent**, and you get a 9-digit ID and a password. Read them out, text them, write them on a sticky note. The other person types them into tokenbud, or into a web page with nothing to install, and starts chatting with *your* AI as if it were their own.
+
+You stay in charge the whole time:
+
+- **You set the limits.** Choose how many people can chat at once and how many questions you'll lend each hour. When the hour's budget is spent, sharing pauses on its own and they can see when it comes back.
+- **Your key never leaves your computer.** They get answers, never the secret behind them. Their questions are answered on your computer, by your model or your account.
+- **One click ends it.** Kick one person, or change the password and everyone is out.
+- **You don't set anything up.** tokenbud connects through a ready-made go-between that the project runs for you around the clock, so it works behind any home router. Prefer your own? You can [run your own](#run-your-own-relay) in a few minutes.
+
+Think of it as a library card for your AI: people borrow time, you keep the book.
 
 ## Highlights
 
-- **TeamViewer-simple.** A 9-digit ID and a password. A new password disconnects everyone.
+- **Simple to share.** A 9-digit ID and a password. A new password disconnects everyone.
 - **Seats you control.** Choose how many people can prompt at the same time; everyone else waits for a free seat.
 - **A reserve that protects you.** Lend at most N prompts an hour. Sharing pauses on its own, and people see when it resumes.
 - **Your model, your choice.** A local model in Ollama or LM Studio, or your own key for Anthropic, OpenAI, Google Gemini, Mistral, Groq, DeepSeek, xAI, OpenRouter, or any OpenAI-compatible API.
-- **Nothing to install for guests.** The relay also serves a web client, and the desktop app does the same job.
+- **Nothing to install for guests.** The default relay also serves a web client, and the desktop app does the same job.
 - **Local-first memory.** Chats and the facts you want the agent to know stay on your device, and are sent along only while you're connected.
 - **Agent to agent.** `tokenbud mcp` lets your own agent (Claude Code or any MCP client) prompt a shared one.
 - **Light and dark,** with a calm, flat look.
@@ -89,7 +98,7 @@ The ⚙ button opens Settings:
 
 - **Model.** Where answers come from (see below).
 - **Reserve.** Lend at most N prompts an hour (default 30, rolling). It also shows what you've lent.
-- **Relay.** tokenbud's public relay, or your own.
+- **Relay.** The default relay (a Cloudflare Worker run by the project), or your own.
 - **Appearance.** Light, dark, or match the system.
 
 The window opens at one size for both modes, remembers the size and position you leave it at, and the layout adapts to the width.
@@ -124,7 +133,7 @@ It adds one tool, `ask(prompt)`. Each call takes a seat only while it runs.
 
 ## Run your own relay
 
-tokenbud uses a public relay by default. It's free and best effort. You can run your own on Cloudflare's free plan in a few minutes, and then only the people you choose share it.
+tokenbud uses the project's relay by default, a Cloudflare Worker that is kept running for everyone. You can also run your own on Cloudflare's free plan in a few minutes, and then only the people you choose share it.
 
 **You need** a free [Cloudflare account](https://dash.cloudflare.com/sign-up) and [Node.js](https://nodejs.org) 20 or later.
 
@@ -140,7 +149,7 @@ The deploy prints your relay's address, such as `https://tokenbud-relay.<you>.wo
 
 1. In tokenbud, open **Settings → Relay**, choose **My own relay**, paste the address, and click **Use this relay**. The app checks that it's a tokenbud relay before switching.
 2. Everyone you share with, and everyone you connect to, has to use the same relay. Guests can also simply open the relay's address in a browser.
-3. You get a separate ID on each relay. Your ID on the public relay is kept.
+3. You get a separate ID on each relay. Your ID on the default relay is kept.
 
 Good to know:
 - **Free plan limits.** The Workers free plan allows about 100,000 requests a day. A connected guest checks in about every 15 seconds, so that's roughly 15 to 20 people connected all day. The $5 paid plan removes the worry.
