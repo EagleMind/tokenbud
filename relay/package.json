@@ -1,17 +1,20 @@
 {
   "name": "tokenbud-relay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "npm run build:web && wrangler dev",
     "deploy": "npm run build:web && wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "build:web": "npm --prefix ../desktop run build:web"
+    "build:web": "npm --prefix ../desktop run build:web",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.4",
     "@cloudflare/workers-types": "^5.20261006.1",
     "typescript": "^5.6.0",
+    "vitest": "^4.1.4",
     "wrangler": "^4.151.1"
   }
 }

@@ -9,6 +9,8 @@ use tokenbud_core::{relay_url, store, DEFAULT_RELAY_URL};
 pub const CONFIG_FILE: &str = "host.json";
 const PASSWORD_SECRET: &str = "host_password";
 pub const MAX_SEATS: u32 = 50;
+/// The most prompts an hour the reserve can be set to lend.
+pub const MAX_PER_HOUR: u32 = 1000;
 
 /// What answers prompts.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,6 +124,15 @@ impl HostConfig {
         }
     }
 
+    /// Forget your ID on a relay (it no longer knows it); the next connection registers a new one.
+    pub fn forget_host_id_on(&mut self, relay: &str) {
+        if relay == DEFAULT_RELAY_URL {
+            self.host_id = None;
+        } else {
+            self.relay_hosts.remove(relay);
+        }
+    }
+
     /// Your ID on the relay in use right now.
     pub fn current_host_id(&self) -> Option<String> {
         self.host_id_on(&relay_url())
@@ -161,4 +172,30 @@ pub fn new_password() -> Result<String> {
     let p: String = bytes.iter().map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect();
     store::set_secret(PASSWORD_SECRET, &p)?;
     Ok(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_one_id_per_relay() {
+        let mut cfg = HostConfig { host_id: Some("111111111".into()), ..Default::default() };
+        cfg.set_host_id_on("https://mine.example", "222222222".into());
+        assert_eq!(cfg.host_id_on(DEFAULT_RELAY_URL).as_deref(), Some("111111111"));
+        assert_eq!(cfg.host_id_on("https://mine.example").as_deref(), Some("222222222"));
+        cfg.forget_host_id_on("https://mine.example");
+        assert_eq!(cfg.host_id_on("https://mine.example"), None);
+        assert_eq!(cfg.host_id_on(DEFAULT_RELAY_URL).as_deref(), Some("111111111"));
+        // Secrets of different relays never share a keychain entry.
+        assert_ne!(host_secret_key(DEFAULT_RELAY_URL, "1"), host_secret_key("https://mine.example", "1"));
+    }
+
+    #[test]
+    fn reads_old_engine_names() {
+        let cfg: HostConfig = serde_json::from_str(r#"{"engine":"api_key"}"#).unwrap();
+        assert_eq!(cfg.engine, Engine::Provider);
+        let cfg: HostConfig = serde_json::from_str(r#"{"engine":"something_new"}"#).unwrap();
+        assert_eq!(cfg.engine, Engine::Local);
+    }
 }

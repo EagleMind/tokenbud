@@ -3759,9 +3759,10 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokenbud-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
+ "serde",
  "serde_json",
  "tokenbud-core",
  "tokio",
@@ -3769,7 +3770,7 @@ dependencies = [
 
 [[package]]
 name = "tokenbud-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3783,7 +3784,7 @@ dependencies = [
 
 [[package]]
 name = "tokenbud-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -3799,7 +3800,7 @@ dependencies = [
 
 [[package]]
 name = "tokenbud-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "futures-util",

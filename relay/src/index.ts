@@ -1,43 +1,74 @@
-// tokenbud relay (and host of the web client, see wrangler.jsonc): passes prompts from people connected to a host on to the host's agent,
-// and answers back. Works like TeamViewer: a host has an ID and a password; anyone with
-// both can connect, as long as the host has a free seat.
+// tokenbud relay (and host of the web client, see wrangler.jsonc): passes prompts from people
+// connected to a host on to the host's agent, and answers back. Works like TeamViewer: a host has
+// an ID and a password; anyone with both can connect, as long as the host has a free seat.
 //
-// One Durable Object per host. The host app keeps an outbound WebSocket open to it;
-// people connect over HTTP. The relay stores only hashes of secrets, and keeps prompts
-// just long enough to deliver the answer.
+// One Durable Object per host. The host app keeps an outbound WebSocket open to it; people
+// connect over HTTP. The relay stores only hashes of secrets, and keeps prompts just long enough
+// to deliver the answer. Every error carries a machine-readable `code` (see util.ts).
 
 import { DurableObject } from "cloudflare:workers";
 
-export interface Env {
-  HOSTS: DurableObjectNamespace<HostRelay>;
+import {
+  activePause,
+  cleanName,
+  equalSecret,
+  errorResponse,
+  fail,
+  fromResult,
+  hashPassword,
+  isLegacyHash,
+  json,
+  ok,
+  randomHostId,
+  randomToken,
+  sha256,
+  truncateBytes,
+  utf8Bytes,
+  verifyPassword,
+  type Paused,
+  type Result,
+} from "./util";
+
+interface RateLimit {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
-const MAX_PROMPT_CHARS = 200_000;
-const MAX_RESULT_CHARS = 1_000_000;
-const MAX_HISTORY_CHARS = 400_000;
+export interface Env {
+  HOSTS: DurableObjectNamespace<HostRelay>;
+  /** Per-IP limits (wrangler.jsonc "ratelimits"); absent in tests and older deployments. */
+  REGISTER_LIMIT?: RateLimit;
+  SESSION_LIMIT?: RateLimit;
+}
+
+// Sizes are UTF-8 bytes: what storage and WebSocket messages count.
+const MAX_BODY_BYTES = 1_500_000;
+const MAX_PROMPT_BYTES = 200_000;
+const MAX_HISTORY_BYTES = 400_000;
 const MAX_HISTORY_TURNS = 200;
-// The asker's saved memory, passed to the agent as a system prompt.
-const MAX_CONTEXT_CHARS = 10_000;
+const MAX_CONTEXT_BYTES = 10_000; // the asker's saved memory, passed to the agent as a system prompt
+const MAX_RESULT_BYTES = 1_000_000;
+const MAX_ERROR_BYTES = 2_000;
 const MAX_NAME_CHARS = 64;
 const MAX_SEATS = 50;
+const MIN_PASSWORD_CHARS = 8;
 const MAX_WAIT_MS = 50_000;
 // A session ends when its app stops checking in for this long.
 const SESSION_IDLE_MS = 45_000;
+// Checking in more often than this doesn't need writing down.
+const LAST_SEEN_RESOLUTION_MS = 10_000;
 const SWEEP_MS = 30_000;
 const FINISHED_JOB_RETENTION_MS = 10 * 60 * 1000;
 const JOB_TTL_MS = 60 * 60 * 1000;
-// Wrong passwords allowed per host per minute before connecting is paused.
+// Wrong passwords allowed per caller (IP) per minute; other callers are never blocked.
 const MAX_FAILED_LOGINS = 10;
+const FAILED_LOGIN_WINDOW_MS = 60_000;
+// A host that hasn't connected for this long, with nothing pending, is deleted.
+const STALE_HOST_MS = 30 * 24 * 60 * 60 * 1000;
+const REGISTER_ATTEMPTS = 5;
 
 const HOST_ID_RE = /^\d{9}$/;
-const OPEN = ["running"];
-
-type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
-const ok = <T>(data: T): Result<T> => ({ ok: true, data });
-const fail = (status: number, error: string): Result<never> => ({ ok: false, status, error });
 
 type Turn = { role: "user" | "assistant"; content: string };
-
 type SessionRow = { id: string; name: string; token_hash: string; created_at: number; last_seen: number };
 type JobRow = {
   id: string;
@@ -52,55 +83,34 @@ type JobRow = {
   updated_at: number;
 };
 
-// ---------- helpers ----------
-
-function randomToken(bytes = 32): string {
-  const buf = crypto.getRandomValues(new Uint8Array(bytes));
-  return btoa(String.fromCharCode(...buf)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function randomId(): string {
-  // 9 digits, never starting with 0, like "418 203 977".
-  const n = crypto.getRandomValues(new Uint32Array(1))[0] % 900_000_000;
-  return String(100_000_000 + n);
-}
-
-async function sha256(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
-
-const fromResult = <T>(r: Result<T>, okStatus = 200) => (r.ok ? json(r.data, okStatus) : json({ error: r.error }, r.status));
+// ---------- Worker entry ----------
 
 function bearer(request: Request): string | null {
   const m = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization")?.trim() ?? "");
   return m ? m[1] : null;
 }
 
-async function readJson(request: Request): Promise<Record<string, unknown>> {
+const callerIp = (request: Request) => request.headers.get("cf-connecting-ip") ?? "unknown";
+
+/** The JSON body as an object, refusing anything over MAX_BODY_BYTES before parsing it. */
+async function readJson(request: Request): Promise<Record<string, unknown> | "too_large"> {
+  if (Number(request.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) return "too_large";
+  const text = await request.text();
+  if (utf8Bytes(text) > MAX_BODY_BYTES) return "too_large";
   try {
-    const body = await request.json();
-    return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const body: unknown = JSON.parse(text);
+    return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
   } catch {
     return {};
   }
 }
 
-function cleanName(v: unknown, fallback: string): string {
-  const s = typeof v === "string" ? v.trim().slice(0, MAX_NAME_CHARS) : "";
-  return s || fallback;
+const tooLarge = () => errorResponse(413, "too_large", "That's too large to send.");
+const rateLimited = () => errorResponse(429, "rate_limited", "Too many attempts. Wait a minute and try again.");
+
+async function allowed(limit: RateLimit | undefined, key: string): Promise<boolean> {
+  return limit ? (await limit.limit({ key })).success : true;
 }
-
-const jobView = (j: JobRow) => ({ job_id: j.id, status: j.status, text: j.result, error: j.error });
-
-// ---------- Worker entry ----------
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -112,46 +122,54 @@ export default {
       if (parts.length === 1 && parts[0] === "health") {
         return json({ service: "tokenbud-relay", ok: true });
       }
-      if (parts[0] !== "v1" || parts[1] !== "hosts") return json({ error: "not found" }, 404);
+      if (parts[0] !== "v1" || parts[1] !== "hosts") return errorResponse(404, "not_found", "not found");
 
       // POST /v1/hosts -> a new host ID and the secret the host app signs in with.
       if (parts.length === 2 && method === "POST") {
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const hostId = randomId();
+        if (!(await allowed(env.REGISTER_LIMIT, `register:${callerIp(request)}`))) return rateLimited();
+        for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
+          const hostId = randomHostId();
           const secret = "tbh_" + randomToken();
           if (await env.HOSTS.getByName(hostId).init(secret)) {
             return json({ host_id: hostId, host_secret: secret }, 201);
           }
         }
-        return json({ error: "could not allocate an ID, try again" }, 503);
+        return errorResponse(503, "not_sharing", "Couldn't allocate an ID. Try again.");
       }
 
-      const hostId = parts[2];
-      if (!hostId || !HOST_ID_RE.test(hostId)) return json({ error: "No host has that ID." }, 404);
-      const stub = env.HOSTS.getByName(hostId);
+      const hostId = parts[2] ?? "";
       const rest = parts.slice(3).join("/");
-      const token = bearer(request);
+
+      // POST /sessions {password, name} -> start a session (takes a seat). An ID that isn't a
+      // host gets the same answer as a wrong password, so IDs can't be probed.
+      if (rest === "sessions" && method === "POST") {
+        if (!(await allowed(env.SESSION_LIMIT, `session:${callerIp(request)}`))) return rateLimited();
+        if (!HOST_ID_RE.test(hostId)) return errorResponse(401, "wrong_password", "Wrong ID or password.");
+        const body = await readJson(request);
+        if (body === "too_large") return tooLarge();
+        const name = cleanName(body.name, "Someone", MAX_NAME_CHARS);
+        return fromResult(await env.HOSTS.getByName(hostId).openSession(String(body.password ?? ""), name, callerIp(request)), 201);
+      }
+
+      if (!HOST_ID_RE.test(hostId)) return errorResponse(404, "not_found", "not found");
+      const stub = env.HOSTS.getByName(hostId);
 
       // The host app's WebSocket (upgrades have to go through fetch).
       if (rest === "connect") {
         if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-          return json({ error: "expected websocket upgrade" }, 426);
+          return errorResponse(426, "bad_request", "expected websocket upgrade");
         }
         return stub.fetch(request);
       }
 
-      // POST /sessions {password, name} -> start a session (takes a seat).
-      if (rest === "sessions" && method === "POST") {
-        const body = await readJson(request);
-        return fromResult(await stub.openSession(String(body.password ?? ""), cleanName(body.name, "Someone")), 201);
-      }
-
-      if (!token) return json({ error: "missing bearer token" }, 401);
+      const token = bearer(request);
+      if (!token) return errorResponse(401, "session_ended", "Your session has ended.");
 
       if (rest === "sessions" && method === "DELETE") return fromResult(await stub.closeSession(token));
       if (rest === "ping" && method === "GET") return fromResult(await stub.ping(token));
       if (rest === "ask" && method === "POST") {
         const body = await readJson(request);
+        if (body === "too_large") return tooLarge();
         return fromResult(await stub.ask(token, body.prompt, body.history, body.context), 202);
       }
       if (parts.length === 5 && parts[3] === "jobs" && method === "GET") {
@@ -159,10 +177,10 @@ export default {
         const waitMs = Number.isFinite(wait) ? Math.min(Math.max(wait, 0) * 1000, MAX_WAIT_MS) : 0;
         return fromResult(await stub.getJob(token, parts[4], waitMs));
       }
-      return json({ error: "not found" }, 404);
+      return errorResponse(404, "not_found", "not found");
     } catch (err) {
       console.error("relay error", err);
-      return json({ error: "internal error" }, 500);
+      return errorResponse(500, "not_sharing", "Something went wrong on the relay. Try again.");
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -173,27 +191,36 @@ export class HostRelay extends DurableObject<Env> {
   private sql: SqlStorage;
   // Wakeups for long-polling clients. Safe to lose: clients poll again.
   private waiters = new Map<string, Set<() => void>>();
-  private failedLogins: number[] = [];
+  /** Only a claimed ID has tables. Probing an unclaimed ID writes nothing. */
+  private registered = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     ctx.blockConcurrencyWhile(async () => {
-      this.sql.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-      this.sql.exec(`CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL)`);
-      this.sql.exec(`CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, prompt TEXT NOT NULL, history TEXT,
-        status TEXT NOT NULL, result TEXT, error TEXT,
-        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
-      try {
-        this.sql.exec(`ALTER TABLE jobs ADD COLUMN context TEXT`);
-      } catch {
-        /* already there */
-      }
+      this.registered = this.sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'meta'`).toArray().length > 0;
+      if (this.registered) this.migrate();
     });
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+  }
+
+  /** Create or update the schema. Idempotent: run on every start of a claimed ID. */
+  private migrate() {
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, prompt TEXT NOT NULL, history TEXT, context TEXT,
+      status TEXT NOT NULL, result TEXT, error TEXT,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+    // Objects created before `context` existed.
+    const columns = this.sql.exec<{ name: string }>(`PRAGMA table_info(jobs)`).toArray().map((c) => c.name);
+    if (!columns.includes("context")) this.sql.exec(`ALTER TABLE jobs ADD COLUMN context TEXT`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS failed_logins (ip TEXT NOT NULL, at INTEGER NOT NULL)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_session_status ON jobs (session_id, status)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS jobs_status_updated ON jobs (status, updated_at)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS failed_logins_ip_at ON failed_logins (ip, at)`);
   }
 
   // ----- state -----
@@ -207,26 +234,34 @@ export class HostRelay extends DurableObject<Env> {
     this.sql.exec(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value);
   }
 
-  private hostSocket(): WebSocket | undefined {
-    return this.ctx.getWebSockets("host")[0];
+  private deleteMeta(key: string) {
+    this.sql.exec(`DELETE FROM meta WHERE key = ?`, key);
   }
 
-  /** Set while the host's reserve has paused sharing: {kind: "limit" | "busy", until: ms | null}. */
-  private paused(): { kind: string; until: number | null } | null {
+  /** The host's open connection. A replaced socket can linger in the list while it closes. */
+  private hostSocket(): WebSocket | undefined {
+    return this.ctx.getWebSockets("host").find((ws) => ws.readyState === WebSocket.OPEN);
+  }
+
+  /** Set while the host's reserve has paused sharing (and its `until` hasn't passed). */
+  private paused(): Paused | null {
     const raw = this.meta("paused");
-    return raw ? JSON.parse(raw) : null;
+    return raw ? activePause(JSON.parse(raw) as Paused, Date.now()) : null;
   }
 
   private seats(): number {
     return Number(this.meta("seats") ?? "1") || 1;
   }
 
-  private send(ws: WebSocket | undefined, msg: unknown) {
-    if (!ws) return;
+  /** Send to the host. False if there's no open socket or sending failed. */
+  private send(ws: WebSocket | undefined, msg: unknown): boolean {
+    if (!ws) return false;
     try {
       ws.send(JSON.stringify(msg));
+      return true;
     } catch (err) {
       console.warn("send to host failed", err);
+      return false;
     }
   }
 
@@ -237,32 +272,34 @@ export class HostRelay extends DurableObject<Env> {
     for (const resolve of set) resolve();
   }
 
-  private sessionList() {
-    return this.sql
-      .exec<SessionRow>(`SELECT * FROM sessions ORDER BY created_at`)
-      .toArray()
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        since: s.created_at,
-        busy: this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE session_id = ? AND status = 'running'`, s.id).one().n > 0,
-      }));
+  private allSessionIds(): string[] {
+    return this.sql.exec<{ id: string }>(`SELECT id FROM sessions`).toArray().map((r) => r.id);
   }
 
-  /** Tell the host app who is connected right now. */
+  /** Tell the host app who is connected right now (one query, whatever the number of seats). */
   private announce() {
-    this.send(this.hostSocket(), { type: "sessions", sessions: this.sessionList() });
+    const sessions = this.sql
+      .exec<{ id: string; name: string; created_at: number; busy: number }>(
+        `SELECT s.id, s.name, s.created_at,
+                EXISTS (SELECT 1 FROM jobs j WHERE j.session_id = s.id AND j.status = 'running') AS busy
+         FROM sessions s ORDER BY s.created_at`,
+      )
+      .toArray()
+      .map((s) => ({ id: s.id, name: s.name, since: s.created_at, busy: s.busy === 1 }));
+    this.send(this.hostSocket(), { type: "sessions", sessions });
   }
 
   private async session(token: string): Promise<SessionRow | null> {
+    if (!this.registered) return null;
     const rows = this.sql.exec<SessionRow>(`SELECT * FROM sessions WHERE token_hash = ?`, await sha256(token)).toArray();
     if (!rows.length) return null;
     const s = rows[0];
-    if (Date.now() - s.last_seen > SESSION_IDLE_MS) {
+    const now = Date.now();
+    if (now - s.last_seen > SESSION_IDLE_MS) {
       this.endSessions([s.id], "Your session timed out.");
       return null;
     }
-    this.sql.exec(`UPDATE sessions SET last_seen = ? WHERE id = ?`, Date.now(), s.id);
+    if (now - s.last_seen > LAST_SEEN_RESOLUTION_MS) this.sql.exec(`UPDATE sessions SET last_seen = ? WHERE id = ?`, now, s.id);
     return s;
   }
 
@@ -288,8 +325,14 @@ export class HostRelay extends DurableObject<Env> {
     this.announce();
   }
 
-  private async ensureAlarm() {
-    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS);
+  private failJob(jobId: string, error: string) {
+    this.sql.exec(`UPDATE jobs SET status = 'error', error = ?, updated_at = ? WHERE id = ? AND status = 'running'`, error, Date.now(), jobId);
+    this.wake(jobId);
+  }
+
+  private async ensureAlarm(at = Date.now() + SWEEP_MS) {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > at) await this.ctx.storage.setAlarm(at);
   }
 
   private getJobRow(jobId: string): JobRow | null {
@@ -297,32 +340,44 @@ export class HostRelay extends DurableObject<Env> {
     return rows.length ? rows[0] : null;
   }
 
+  private recentFailures(ip: string, now: number): number {
+    return this.sql
+      .exec<{ n: number }>(`SELECT COUNT(*) AS n FROM failed_logins WHERE ip = ? AND at > ?`, ip, now - FAILED_LOGIN_WINDOW_MS)
+      .one().n;
+  }
+
   // ----- RPC -----
 
   /** Claim this ID for a new host. False if it is taken. */
   async init(secret: string): Promise<boolean> {
-    if (this.meta("secret_hash")) return false;
+    if (this.registered) return false;
+    this.migrate();
+    this.registered = true;
     this.setMeta("secret_hash", await sha256(secret));
+    this.setMeta("last_connected", String(Date.now()));
+    await this.ensureAlarm(Date.now() + STALE_HOST_MS);
     return true;
   }
 
-  async openSession(password: string, name: string): Promise<Result<unknown>> {
-    if (!this.meta("secret_hash")) return fail(404, "No host has that ID.");
+  async openSession(password: string, name: string, ip: string): Promise<Result<unknown>> {
+    const wrong = fail(401, "wrong_password", "Wrong ID or password.");
+    if (!this.registered) return wrong;
     const now = Date.now();
-    this.failedLogins = this.failedLogins.filter((t) => now - t < 60_000);
-    if (this.failedLogins.length >= MAX_FAILED_LOGINS) {
-      return fail(429, "Too many wrong passwords. Wait a minute and try again.");
+    if (this.recentFailures(ip, now) >= MAX_FAILED_LOGINS) {
+      return fail(429, "rate_limited", "Too many wrong passwords. Wait a minute and try again.");
     }
     const stored = this.meta("password_hash");
-    if (!stored || !password || stored !== (await sha256(password))) {
-      this.failedLogins.push(now);
-      return fail(401, "Wrong password.");
+    if (!stored || !password || !(await verifyPassword(password, stored))) {
+      this.sql.exec(`INSERT INTO failed_logins (ip, at) VALUES (?, ?)`, ip, now);
+      await this.ensureAlarm();
+      return wrong;
     }
-    if (!this.hostSocket()) return fail(503, "That host isn't sharing right now.");
+    // Connected, and this connection has sent its password ("config"): only then is it sharing.
+    if (!this.hostSocket() || !this.meta("password_hash_ready")) return fail(503, "not_sharing", "That host isn't sharing right now.");
     this.sweep();
     const used = this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM sessions`).one().n;
     if (used >= this.seats()) {
-      return fail(409, `All ${this.seats()} seats are taken. Try again when someone leaves.`);
+      return fail(409, "seats_full", `All ${this.seats()} seats are taken. Try again when someone leaves.`);
     }
     const id = "s_" + randomToken(8);
     const token = "tbs_" + randomToken();
@@ -347,39 +402,42 @@ export class HostRelay extends DurableObject<Env> {
 
   async ping(token: string): Promise<Result<unknown>> {
     const s = await this.session(token);
-    if (!s) return fail(401, "Your session has ended.");
+    if (!s) return fail(401, "session_ended", "Your session has ended.");
     return ok({ online: !!this.hostSocket(), host_name: this.meta("name") ?? "", paused: this.paused() });
   }
 
   async ask(token: string, prompt: unknown, history: unknown, context?: unknown): Promise<Result<unknown>> {
     const s = await this.session(token);
-    if (!s) return fail(401, "Your session has ended.");
+    if (!s) return fail(401, "session_ended", "Your session has ended.");
     const ws = this.hostSocket();
-    if (!ws) return fail(503, "The host stopped sharing.");
-    if (this.paused()) return fail(503, "The host paused sharing for now. Try again a little later.");
-    if (typeof prompt !== "string" || !prompt.trim()) return fail(400, "prompt is required");
-    if (prompt.length > MAX_PROMPT_CHARS) return fail(413, `prompt exceeds ${MAX_PROMPT_CHARS} chars`);
+    if (!ws) return fail(503, "not_sharing", "The host stopped sharing.");
+    if (this.paused()) return fail(503, "paused", "The host paused sharing for now. Try again a little later.");
+    if (typeof prompt !== "string" || !prompt.trim()) return fail(400, "bad_request", "Write a prompt first.");
+    if (utf8Bytes(prompt) > MAX_PROMPT_BYTES) return fail(413, "too_large", "That prompt is too long.");
 
     const turns: Turn[] = [];
     if (history != null) {
-      if (!Array.isArray(history) || history.length > MAX_HISTORY_TURNS) return fail(400, "history is too long");
-      let chars = 0;
-      for (const t of history) {
+      if (!Array.isArray(history) || history.length > MAX_HISTORY_TURNS) {
+        return fail(413, "too_large", "This chat is too long. Start a new one.");
+      }
+      let bytes = 0;
+      for (const item of history as unknown[]) {
+        const t = item as { role?: unknown; content?: unknown } | null;
         if (!t || (t.role !== "user" && t.role !== "assistant") || typeof t.content !== "string") {
-          return fail(400, "each history turn needs a role and content");
+          return fail(400, "bad_request", "Each earlier message needs a role and content.");
         }
-        chars += t.content.length;
+        bytes += utf8Bytes(t.content);
         turns.push({ role: t.role, content: t.content });
       }
-      if (chars > MAX_HISTORY_CHARS) return fail(413, "conversation is too long; start a new chat");
+      if (bytes > MAX_HISTORY_BYTES) return fail(413, "too_large", "This chat is too long. Start a new one.");
     }
-    if (context != null && (typeof context !== "string" || context.length > MAX_CONTEXT_CHARS)) {
-      return fail(413, `memory must be text up to ${MAX_CONTEXT_CHARS} chars`);
+    if (context != null && (typeof context !== "string" || utf8Bytes(context) > MAX_CONTEXT_BYTES)) {
+      return fail(413, "too_large", "Your memory is too long to send. Remove some facts.");
     }
     const ctxText = typeof context === "string" && context.trim() ? context : null;
     // One prompt at a time per person, so seats cap how many run at once.
     const running = this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs WHERE session_id = ? AND status = 'running'`, s.id).one().n;
-    if (running > 0) return fail(409, "Wait for the current answer first.");
+    if (running > 0) return fail(409, "busy", "Wait for the current answer first.");
 
     const now = Date.now();
     const job: JobRow = {
@@ -405,17 +463,22 @@ export class HostRelay extends DurableObject<Env> {
       now,
       now,
     );
-    this.send(ws, { type: "job", job_id: job.id, session_id: s.id, name: s.name, prompt, history: turns, context: ctxText });
+    // `session_id` is unused by current hosts, but v0.1.0 hosts reject a job without it.
+    if (!this.send(ws, { type: "job", job_id: job.id, session_id: s.id, name: s.name, prompt, history: turns, context: ctxText })) {
+      this.failJob(job.id, "The prompt couldn't be delivered to the host.");
+      return fail(503, "not_sharing", "The prompt couldn't be delivered to the host. Try again.");
+    }
     this.announce();
-    return ok(jobView(job));
+    await this.ensureAlarm();
+    return ok({ job_id: job.id, status: job.status, text: null, error: null });
   }
 
   async getJob(token: string, jobId: string, waitMs: number): Promise<Result<unknown>> {
     const s = await this.session(token);
-    if (!s) return fail(401, "Your session has ended.");
+    if (!s) return fail(401, "session_ended", "Your session has ended.");
     let job = this.getJobRow(jobId);
-    if (!job || job.session_id !== s.id) return fail(404, "job not found");
-    if (OPEN.includes(job.status) && waitMs > 0) {
+    if (!job || job.session_id !== s.id) return fail(404, "not_found", "That prompt wasn't found.");
+    if (job.status === "running" && waitMs > 0) {
       await new Promise<void>((resolve) => {
         let set = this.waiters.get(jobId);
         if (!set) this.waiters.set(jobId, (set = new Set()));
@@ -430,17 +493,19 @@ export class HostRelay extends DurableObject<Env> {
       // Long polls count as activity too.
       this.sql.exec(`UPDATE sessions SET last_seen = ? WHERE id = ?`, Date.now(), s.id);
       job = this.getJobRow(jobId);
-      if (!job) return fail(404, "job not found");
+      if (!job) return fail(404, "not_found", "That prompt wasn't found.");
     }
-    return ok(jobView(job));
+    return ok({ job_id: job.id, status: job.status, text: job.result, error: job.error });
   }
 
   // ----- the host app's WebSocket -----
 
   async fetch(request: Request): Promise<Response> {
     const token = bearer(request);
-    const stored = this.meta("secret_hash");
-    if (!token || !stored || stored !== (await sha256(token))) return json({ error: "invalid host secret" }, 401);
+    const stored = this.registered ? this.meta("secret_hash") : null;
+    if (!token || !stored || !equalSecret(stored, await sha256(token))) {
+      return errorResponse(401, "session_ended", "invalid host secret");
+    }
 
     for (const old of this.ctx.getWebSockets("host")) {
       try {
@@ -450,32 +515,49 @@ export class HostRelay extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server, ["host"]);
-    // A new connection starts unpaused; the host re-sends its pause state right after "config".
-    this.sql.exec(`DELETE FROM meta WHERE key = 'paused'`);
-    // The host sends its password and seat count first ("config"); until then nobody can connect.
+    // Nobody can connect until this connection sends its password and seats ("config"), and it
+    // starts unpaused; the host re-sends its pause state right after "config".
+    this.deleteMeta("password_hash_ready");
+    this.deleteMeta("paused");
+    this.setMeta("last_connected", String(Date.now()));
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     if (typeof message !== "string") return;
-    let msg: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      msg = JSON.parse(message);
+      parsed = JSON.parse(message);
     } catch {
       return;
     }
+    if (!parsed || typeof parsed !== "object") return;
+    const msg = parsed as Record<string, unknown>;
+    try {
+      await this.handleHostMessage(msg);
+    } catch (err) {
+      console.error("host message failed", err);
+      // An answer that couldn't be stored mustn't leave its asker waiting an hour.
+      if (msg.type === "result" && typeof msg.job_id === "string") {
+        this.failJob(msg.job_id, "The answer couldn't be delivered (it may be too large).");
+      }
+    }
+  }
+
+  private async handleHostMessage(msg: Record<string, unknown>) {
     const now = Date.now();
 
     if (msg.type === "config") {
-      if (typeof msg.password === "string" && msg.password.length >= 4) {
-        const hash = await sha256(msg.password);
-        const changed = this.meta("password_hash") !== hash;
-        this.setMeta("password_hash", hash);
+      if (typeof msg.password === "string" && msg.password.length >= MIN_PASSWORD_CHARS) {
+        const stored = this.meta("password_hash");
+        const same = stored !== null && (await verifyPassword(msg.password, stored));
+        if (!same || isLegacyHash(stored)) this.setMeta("password_hash", await hashPassword(msg.password));
+        this.setMeta("password_hash_ready", "1");
         // A new password ends everyone's session, like TeamViewer.
-        if (changed) this.endSessions(this.sql.exec<{ id: string }>(`SELECT id FROM sessions`).toArray().map((r) => r.id), "The host changed the password.");
+        if (!same) this.endSessions(this.allSessionIds(), "The host changed the password.");
       }
       if (typeof msg.seats === "number") this.setMeta("seats", String(Math.min(Math.max(Math.floor(msg.seats), 1), MAX_SEATS)));
-      if (typeof msg.name === "string") this.setMeta("name", msg.name.slice(0, MAX_NAME_CHARS));
+      if (typeof msg.name === "string") this.setMeta("name", cleanName(msg.name, "", MAX_NAME_CHARS));
       this.announce();
       await this.ensureAlarm();
       return;
@@ -483,10 +565,10 @@ export class HostRelay extends DurableObject<Env> {
 
     if (msg.type === "pause") {
       const p = msg.paused as { kind?: unknown; until?: unknown } | null;
-      if (p && (p.kind === "limit" || p.kind === "busy")) {
+      if (p && typeof p === "object" && (p.kind === "limit" || p.kind === "busy")) {
         this.setMeta("paused", JSON.stringify({ kind: p.kind, until: typeof p.until === "number" ? p.until : null }));
       } else {
-        this.sql.exec(`DELETE FROM meta WHERE key = 'paused'`);
+        this.deleteMeta("paused");
       }
       return;
     }
@@ -498,8 +580,8 @@ export class HostRelay extends DurableObject<Env> {
 
     if (msg.type === "result" && typeof msg.job_id === "string") {
       const status = msg.status === "done" ? "done" : "error";
-      const text = typeof msg.text === "string" ? msg.text.slice(0, MAX_RESULT_CHARS) : null;
-      const error = typeof msg.error === "string" ? msg.error.slice(0, 2000) : null;
+      const text = typeof msg.text === "string" ? truncateBytes(msg.text, MAX_RESULT_BYTES) : null;
+      const error = typeof msg.error === "string" ? truncateBytes(msg.error, MAX_ERROR_BYTES) : null;
       this.sql.exec(
         `UPDATE jobs SET status = ?, result = ?, error = ?, updated_at = ? WHERE id = ? AND status = 'running'`,
         status,
@@ -517,13 +599,16 @@ export class HostRelay extends DurableObject<Env> {
     try {
       ws.close(code === 1005 ? 1000 : code, reason);
     } catch {}
-    // The host stopped sharing: everyone is disconnected.
-    if (!this.ctx.getWebSockets("host").some((w) => w !== ws)) {
-      this.endSessions(this.sql.exec<{ id: string }>(`SELECT id FROM sessions`).toArray().map((r) => r.id), "The host stopped sharing.");
+    // The host stopped sharing: everyone is disconnected, and any pause ends with it.
+    if (!this.ctx.getWebSockets("host").some((w) => w !== ws && w.readyState === WebSocket.OPEN)) {
+      this.endSessions(this.allSessionIds(), "The host stopped sharing.");
+      this.deleteMeta("paused");
+      this.setMeta("last_connected", String(Date.now()));
+      await this.ensureAlarm();
     }
   }
 
-  async webSocketError(ws: WebSocket, error: unknown) {
+  async webSocketError(_ws: WebSocket, error: unknown) {
     console.warn("host websocket error", error);
   }
 
@@ -546,13 +631,26 @@ export class HostRelay extends DurableObject<Env> {
       .toArray();
     for (const j of stale) this.wake(j.id);
     this.sql.exec(`DELETE FROM jobs WHERE status != 'running' AND updated_at < ?`, now - FINISHED_JOB_RETENTION_MS);
+    this.sql.exec(`DELETE FROM failed_logins WHERE at < ?`, now - FAILED_LOGIN_WINDOW_MS);
   }
 
   async alarm() {
+    if (!this.registered) return;
     this.sweep();
-    const left =
+    const now = Date.now();
+    const pending =
       this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM sessions`).one().n +
-      this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs`).one().n;
-    if (left > 0) await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS);
+      this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM jobs`).one().n +
+      this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM failed_logins`).one().n;
+    if (pending > 0) return this.ctx.storage.setAlarm(now + SWEEP_MS);
+    if (this.hostSocket()) return; // connected hosts aren't stale; disconnecting schedules the next check
+    // A host that hasn't connected in a long time, with nothing pending, is deleted for good.
+    const lastConnected = Number(this.meta("last_connected") ?? "0");
+    if (now - lastConnected >= STALE_HOST_MS) {
+      await this.ctx.storage.deleteAll();
+      this.registered = false;
+      return;
+    }
+    await this.ctx.storage.setAlarm(lastConnected + STALE_HOST_MS);
   }
 }

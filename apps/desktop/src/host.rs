@@ -1,29 +1,46 @@
 //! Host mode: share this computer's agent. Shows the ID and password; anyone with both can prompt it.
 
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
-use tokenbud_core::types::Session;
-use tokenbud_host::config::{Engine, HostConfig};
+use tokenbud_core::store;
+use tokenbud_core::types::{Paused, Session};
+use tokenbud_host::config::{self, Engine, HostConfig};
 use tokenbud_host::providers::{self, Preset};
 use tokenbud_host::service::{Cmd, Service, Status};
+
+const MAX_URL_CHARS: usize = 2048;
+const MAX_MODEL_CHARS: usize = 200;
+const MAX_KEY_CHARS: usize = 1000;
 
 /// The sharing service starts the first time host mode is opened, so someone who only ever
 /// connects to others never shares by accident.
 #[derive(Default)]
-pub struct Host(Mutex<Option<Service>>, std::sync::atomic::AtomicBool);
+pub struct Host {
+    service: Mutex<Option<Service>>,
+    /// Host mode has been opened this run (the first visit starts sharing).
+    host_mode_opened: AtomicBool,
+    /// Which providers have a key saved: the keychain is slow to ask, so it's asked once, then
+    /// kept up to date when keys are saved or forgotten.
+    has_key: Mutex<Option<BTreeMap<&'static str, bool>>>,
+}
 
 impl Host {
     /// The service, started on first use. `share` says whether a first start begins sharing:
     /// yes from host mode, no from the settings screen.
     fn service(&self, handle: &AppHandle, share: bool) -> Result<Service, String> {
-        let mut slot = self.0.lock().unwrap();
+        let mut slot = self.service.lock().unwrap();
         if let Some(s) = slot.as_ref() {
             return Ok(s.clone());
         }
         let handle = handle.clone();
-        let config = HostConfig::load().unwrap_or_default();
+        let (config, note) = store::load_json_or_backup::<HostConfig>(config::CONFIG_FILE);
+        if let Some(note) = note {
+            eprintln!("tokenbud: {note}");
+        }
         let service = Service::start(
             config,
             Arc::new(move |_| {
@@ -43,7 +60,7 @@ impl Host {
 
     /// After the relay changed: reconnect, if sharing, so the new relay is used.
     pub fn reconnect(&self) {
-        if let Some(s) = self.0.lock().unwrap().as_ref() {
+        if let Some(s) = self.service.lock().unwrap().as_ref() {
             if s.shared.lock().unwrap().status != Status::Stopped {
                 s.send(Cmd::SetSharing(false));
                 s.send(Cmd::SetSharing(true));
@@ -53,7 +70,20 @@ impl Host {
 
     /// Is the agent being shared right now? (Without starting anything.)
     pub fn sharing(&self) -> bool {
-        self.0.lock().unwrap().as_ref().is_some_and(|s| s.shared.lock().unwrap().status != Status::Stopped)
+        self.service.lock().unwrap().as_ref().is_some_and(|s| s.shared.lock().unwrap().status != Status::Stopped)
+    }
+
+    fn keys_saved(&self) -> BTreeMap<&'static str, bool> {
+        let mut cache = self.has_key.lock().unwrap();
+        cache
+            .get_or_insert_with(|| providers::PRESETS.iter().map(|p| (p.id, matches!(providers::get_key(p.id), Ok(Some(_))))).collect())
+            .clone()
+    }
+
+    fn set_key_saved(&self, provider: &'static str, saved: bool) {
+        if let Some(cache) = self.has_key.lock().unwrap().as_mut() {
+            cache.insert(provider, saved);
+        }
     }
 }
 
@@ -113,19 +143,21 @@ pub struct ReserveView {
     pause_while_busy: bool,
     lent_hour: u32,
     lent_day: u32,
-    /// Claude Code's estimate for the last 24 hours (the API engine doesn't report one).
+    /// The cost over the last 24 hours, when the engine reports one (only Claude Code does).
     cost_day: f64,
-    paused: Option<tokenbud_core::types::Paused>,
+    paused: Option<Paused>,
 }
 
+/// Async, so it runs off the UI thread: the first call asks the keychain about every provider.
 #[tauri::command]
-pub fn host_state(host: State<Host>, handle: AppHandle, share: Option<bool>) -> Result<HostView, String> {
+pub async fn host_state(host: State<'_, Host>, handle: AppHandle, share: Option<bool>) -> Result<HostView, String> {
     let share = share.unwrap_or(false);
     let service = host.service(&handle, share)?;
     // The first visit to host mode shares, even if the settings screen started the service stopped.
-    if share && !host.1.swap(true, std::sync::atomic::Ordering::SeqCst) && service.shared.lock().unwrap().status == Status::Stopped {
+    if share && !host.host_mode_opened.swap(true, Ordering::SeqCst) && service.shared.lock().unwrap().status == Status::Stopped {
         service.send(Cmd::SetSharing(true));
     }
+    let keys = host.keys_saved();
     let cfg = service.config.read().unwrap().clone();
     let s = service.shared.lock().unwrap();
     let (status, detail) = match &s.status {
@@ -141,16 +173,12 @@ pub fn host_state(host: State<Host>, handle: AppHandle, share: Option<bool>) -> 
         password: s.password.clone(),
         seats: cfg.seats,
         engine: cfg.engine(),
-        claude_code_allowed: tokenbud_host::config::claude_code_allowed(),
+        claude_code_allowed: config::claude_code_allowed(),
         local: LocalView { url: cfg.local_url.clone(), model: cfg.local_model.clone() },
         provider: cfg.provider.clone(),
         providers: providers::PRESETS
             .iter()
-            .map(|p| ProviderView {
-                preset: *p,
-                has_key: matches!(providers::get_key(p.id), Ok(Some(_))),
-                model: cfg.provider_model(p.id),
-            })
+            .map(|p| ProviderView { preset: *p, has_key: keys.get(p.id).copied().unwrap_or(false), model: cfg.provider_model(p.id) })
             .collect(),
         custom_url: cfg.custom_url.clone(),
         models: s.models.clone(),
@@ -169,6 +197,19 @@ pub fn host_state(host: State<Host>, handle: AppHandle, share: Option<bool>) -> 
             paused: s.paused.clone(),
         },
     })
+}
+
+/// Input from the window is checked here, before it reaches settings or the keychain.
+fn limit(value: &str, max: usize, what: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.chars().count() > max {
+        return Err(format!("That {what} is too long."));
+    }
+    Ok(value.to_string())
+}
+
+fn known_provider(id: &str) -> Result<&'static Preset, String> {
+    providers::preset(id).ok_or_else(|| format!("unknown provider {id}"))
 }
 
 #[tauri::command]
@@ -203,6 +244,11 @@ pub fn check_engine(host: State<Host>, handle: AppHandle) -> Result<(), String> 
 
 #[tauri::command]
 pub fn set_local(host: State<Host>, handle: AppHandle, url: String, model: String) -> Result<(), String> {
+    let url = limit(&url, MAX_URL_CHARS, "address")?;
+    if !url.is_empty() {
+        providers::normalize(&url).map_err(|e| format!("{e:#}"))?;
+    }
+    let model = limit(&model, MAX_MODEL_CHARS, "model name")?;
     host.send(&handle, Cmd::SetLocal { url, model })
 }
 
@@ -213,32 +259,44 @@ pub fn set_reserve(host: State<Host>, handle: AppHandle, max_per_hour: u32, paus
 
 #[tauri::command]
 pub fn set_provider(host: State<Host>, handle: AppHandle, provider: String) -> Result<(), String> {
+    known_provider(&provider)?;
     host.send(&handle, Cmd::SetProvider(provider))
 }
 
 #[tauri::command]
 pub fn set_provider_model(host: State<Host>, handle: AppHandle, provider: String, model: String) -> Result<(), String> {
+    known_provider(&provider)?;
+    let model = limit(&model, MAX_MODEL_CHARS, "model name")?;
     host.send(&handle, Cmd::SetProviderModel { provider, model })
 }
 
 #[tauri::command]
 pub fn set_custom_url(host: State<Host>, handle: AppHandle, url: String) -> Result<(), String> {
+    let url = limit(&url, MAX_URL_CHARS, "address")?;
+    if !url.is_empty() {
+        // Refuse plain http across the internet before a key is ever sent there.
+        providers::normalize(&url).map_err(|e| format!("{e:#}"))?;
+    }
     host.send(&handle, Cmd::SetCustomUrl(url))
 }
 
-/// Keys go to the OS keychain, one per provider.
+/// Keys go to the system keychain (or secrets.json with TOKENBUD_PLAIN_SECRETS=1), one per provider.
 #[tauri::command]
-pub fn save_provider_key(host: State<Host>, handle: AppHandle, provider: String, key: String) -> Result<(), String> {
-    let key = key.trim();
+pub async fn save_provider_key(host: State<'_, Host>, handle: AppHandle, provider: String, key: String) -> Result<(), String> {
+    let preset = known_provider(&provider)?;
+    let key = limit(&key, MAX_KEY_CHARS, "key")?;
     if key.is_empty() {
         return Err("Paste a key first.".into());
     }
-    providers::set_key(&provider, key).map_err(|e| format!("{e:#}"))?;
+    providers::set_key(preset.id, &key).map_err(|e| format!("{e:#}"))?;
+    host.set_key_saved(preset.id, true);
     host.send(&handle, Cmd::CheckEngine)
 }
 
 #[tauri::command]
-pub fn forget_provider_key(host: State<Host>, handle: AppHandle, provider: String) -> Result<(), String> {
-    providers::forget_key(&provider).map_err(|e| format!("{e:#}"))?;
+pub async fn forget_provider_key(host: State<'_, Host>, handle: AppHandle, provider: String) -> Result<(), String> {
+    let preset = known_provider(&provider)?;
+    providers::forget_key(preset.id).map_err(|e| format!("{e:#}"))?;
+    host.set_key_saved(preset.id, false);
     host.send(&handle, Cmd::CheckEngine)
 }

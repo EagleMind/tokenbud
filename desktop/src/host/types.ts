@@ -9,10 +9,8 @@ export interface Session {
   busy: boolean;
 }
 
-export interface Paused {
-  kind: "limit" | "busy";
-  until: number | null;
-}
+export type { Paused } from "@/client/backend";
+import type { Paused } from "@/client/backend";
 
 export interface Reserve {
   max_per_hour: number;

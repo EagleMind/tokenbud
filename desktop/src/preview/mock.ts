@@ -3,6 +3,9 @@
 // Use the switch at the top for host and client mode; ?connect=1 shows the connect screen.
 // Never part of the desktop builds.
 
+import type { ClientState } from "../client/backend";
+import type { HostState } from "../host/types";
+
 const now = Date.now();
 const min = 60_000;
 const params = new URLSearchParams(location.search);
@@ -13,21 +16,23 @@ const host = {
   host_id: "418203977",
   password: "k7m2pqxa",
   seats: 3,
-  engine: params.get("engine") ?? "local",
+  engine: (params.get("engine") ?? "local") as HostState["engine"],
   claude_code_allowed: true,
   local: { url: "", model: "" },
   provider: "openai",
-  providers: [
-    ["anthropic", "Anthropic", "platform.claude.com", "claude-opus-5-5", true],
-    ["openai", "OpenAI", "platform.openai.com/api-keys", "", true],
-    ["google", "Google Gemini", "aistudio.google.com/apikey", "", false],
-    ["mistral", "Mistral", "console.mistral.ai", "", false],
-    ["groq", "Groq", "console.groq.com/keys", "", false],
-    ["deepseek", "DeepSeek", "platform.deepseek.com/api_keys", "", false],
-    ["xai", "xAI", "console.x.ai", "", false],
-    ["openrouter", "OpenRouter", "openrouter.ai/keys", "", false],
-    ["custom", "Custom", "", "", false],
-  ].map(([id, name, key_url, default_model, has_key]) => ({ id, name, key_url, default_model, has_key, model: "" })),
+  providers: (
+    [
+      ["anthropic", "Anthropic", "platform.claude.com", "claude-opus-5-5", true],
+      ["openai", "OpenAI", "platform.openai.com/api-keys", "", true],
+      ["google", "Google Gemini", "aistudio.google.com/apikey", "", false],
+      ["mistral", "Mistral", "console.mistral.ai", "", false],
+      ["groq", "Groq", "console.groq.com/keys", "", false],
+      ["deepseek", "DeepSeek", "platform.deepseek.com/api_keys", "", false],
+      ["xai", "xAI", "console.x.ai", "", false],
+      ["openrouter", "OpenRouter", "openrouter.ai/keys", "", false],
+      ["custom", "Custom", "", "", false],
+    ] as const
+  ).map(([id, name, key_url, default_model, has_key]) => ({ id, name, key_url, default_model, has_key, model: "" })),
   custom_url: "",
   models: ["qwen3:8b", "llama3.2:3b", "gemma3:12b"],
   engine_check: { ok: true, text: "Ollama is running, answering with qwen3:8b." },
@@ -49,9 +54,9 @@ const host = {
           ? { kind: "limit", until: now + 18 * min }
           : null,
   },
-};
+} satisfies HostState;
 
-const client: Record<string, unknown> = {
+const client = {
   connection:
     params.get("connect") === "1"
       ? null
@@ -88,7 +93,7 @@ const client: Record<string, unknown> = {
     },
     { id: "chat1", title: "Recommend a book on sourdough baking", messages: [] },
   ],
-};
+} satisfies ClientState;
 
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
   transformCallback: (cb: unknown) => {
@@ -108,6 +113,9 @@ const client: Record<string, unknown> = {
     return null;
   },
 };
+
+// Unsubscribing from events goes through here.
+(window as unknown as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 
 await import("../app/main");
 

@@ -5,15 +5,28 @@ import { Check, Copy, Monitor, Moon, Sun } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type Theme, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
+/**
+ * Answers come from someone else's model, so they're treated as untrusted: no raw HTML (the
+ * default), links open outside the app, and images become links instead of loading (a remote
+ * image would tell its server you read the answer).
+ */
 export function Markdown({ children, className }: { children: string; className?: string }) {
   return (
     <div className={cn("prose-answer selectable", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" /> }}
+        components={{
+          a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+          img: ({ src, alt }) => (
+            <a href={typeof src === "string" ? src : undefined} target="_blank" rel="noreferrer noopener">
+              {alt ? `Image: ${alt}` : "Image"}
+            </a>
+          ),
+        }}
       >
         {children}
       </ReactMarkdown>
@@ -21,40 +34,54 @@ export function Markdown({ children, className }: { children: string; className?
   );
 }
 
+const COPIED_MS = 1500;
+
+/**
+ * Copies `text`. With `label` it's a small text button; without, an icon button whose tooltip
+ * is `tooltip`. It only says "Copied" when copying actually worked.
+ */
 export function CopyButton({
   text,
-  label = "Copy",
-  copiedLabel = "Copied",
-  variant = "ghost",
-  size = "sm",
+  label,
+  tooltip = "Copy",
+  icon,
   className,
 }: {
   text: string;
   label?: string;
-  copiedLabel?: string;
-  variant?: "ghost" | "outline" | "secondary" | "default";
-  size?: "sm" | "default" | "icon";
+  tooltip?: string;
+  icon?: React.ReactNode;
   className?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), COPIED_MS);
+    } catch {
+      toast.error("Couldn't reach the clipboard. Select the text and copy it instead.");
+    }
+  };
+  const glyph = copied ? <Check className="text-live" /> : (icon ?? <Copy />);
+
+  if (label) {
+    return (
+      <Button variant="ghost" size="sm" className={className} onClick={copy}>
+        {glyph}
+        {copied ? "Copied" : label}
+      </Button>
+    );
+  }
   return (
-    <Button
-      variant={variant}
-      size={size}
-      className={className}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1600);
-        } catch {
-          toast.error("Couldn't reach the clipboard. Select the text and copy it instead.");
-        }
-      }}
-    >
-      {copied ? <Check /> : <Copy />}
-      {size !== "icon" && (copied ? copiedLabel : label)}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon" className={className} onClick={copy} aria-label={tooltip}>
+          {glyph}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{copied ? "Copied" : tooltip}</TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -53,9 +53,12 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l);
 }
 
-/** The chosen theme, and what it resolves to right now. */
+const resolve = (t: Theme): "light" | "dark" => (t === "dark" || (t === "system" && media.matches) ? "dark" : "light");
+
+/** The chosen theme, and what it resolves to right now (which follows the system for "system"). */
 export function useTheme() {
-  const theme = useSyncExternalStore(subscribe, () => current);
-  const resolved: "light" | "dark" = theme === "dark" || (theme === "system" && media.matches) ? "dark" : "light";
+  // The snapshot includes the resolved theme, so a system dark-mode switch re-renders too.
+  const snapshot = useSyncExternalStore(subscribe, () => `${current}:${resolve(current)}`);
+  const [theme, resolved] = snapshot.split(":") as [Theme, "light" | "dark"];
   return { theme, resolved, setTheme };
 }

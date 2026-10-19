@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
-use crate::Session;
+use crate::Seat;
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
 
@@ -68,9 +68,9 @@ async fn handle(method: &str, params: Value, creds: &(String, String)) -> Result
                 if prompt.trim().is_empty() {
                     anyhow::bail!("prompt is required");
                 }
-                let session = Session::open(&creds.0, &creds.1).await?;
-                let answer = session.ask(&prompt, vec![], None).await;
-                session.close().await;
+                let seat = Seat::open(&creds.0, &creds.1).await?;
+                let answer = seat.ask(&prompt, vec![], None).await;
+                seat.close().await;
                 answer
             }
             .await;

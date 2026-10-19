@@ -1,0 +1,11 @@
+// The relay as tests run it: same Worker and Durable Object, without the web client assets
+// (built separately in desktop/) or the rate-limit bindings (the code works without them).
+{
+  "name": "tokenbud-relay-test",
+  "main": "../src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [{ "name": "HOSTS", "class_name": "HostRelay" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HostRelay"] }]
+}

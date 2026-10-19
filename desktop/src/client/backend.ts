@@ -71,18 +71,21 @@ export function useBackend(): ClientBackend {
   return b;
 }
 
-// ----- memory helpers (shared by the UI and the web store) -----
+// ----- memory and chat rules (shared by the UI and the web store) -----
+// These mirror apps/tokenbud-client/src/memory.rs; tests/fixtures/memory.json keeps them in step.
 
 export const MAX_FACTS = 50;
 export const MAX_FACT_CHARS = 300;
 export const MAX_CHATS = 100;
+export const MAX_DISMISSED = 200;
+const TITLE_CHARS = 48;
 
 const REMEMBER_INSTRUCTION =
   "If they share a lasting fact about themselves or a preference worth remembering in future conversations, " +
   'end your reply with <remember>one short fact, like "Prefers short answers"</remember> (at most two). ' +
   "Otherwise don't add it, and never mention these tags.";
 
-/** The system prompt that carries your memory to the host's agent. Mirrors `Memory::context` in apps/desktop/src/client.rs. */
+/** The system prompt that carries your memory to the host's agent (null when memory is off). */
 export function buildContext(memory: Memory): string | null {
   if (!memory.enabled) return null;
   let out = "";
@@ -99,9 +102,72 @@ const REMEMBER_RE = /<remember>([\s\S]*?)(?:<\/remember>|$)/g;
 /** An answer without its <remember> tags, and the facts the agent suggested. */
 export function splitSuggestions(answer: string): { text: string; suggestions: string[] } {
   const suggestions = [...answer.matchAll(REMEMBER_RE)].map((m) => cleanFact(m[1])).filter(Boolean);
-  return { text: answer.replace(REMEMBER_RE, "").trimEnd(), suggestions };
+  return { text: answer.replace(REMEMBER_RE, "").trim(), suggestions };
 }
 
+/** Characters, not UTF-16 units: never splits an emoji. */
+const takeChars = (s: string, n: number) => Array.from(s).slice(0, n).join("");
+
+/** One line, trimmed, at most MAX_FACT_CHARS characters ("" when there's nothing). */
 export function cleanFact(text: string): string {
-  return text.replace(/\s+/g, " ").trim().slice(0, MAX_FACT_CHARS);
+  return takeChars(text.replace(/\s+/g, " ").trim(), MAX_FACT_CHARS);
+}
+
+/** A chat's title: the first non-empty line of its first prompt, cut by characters. */
+export function titleOf(prompt: string): string {
+  const line = prompt.split("\n").find((l) => l.trim())?.trim() ?? "New chat";
+  return Array.from(line).length > TITLE_CHARS ? takeChars(line, TITLE_CHARS) + "…" : line;
+}
+
+export type Turn = { role: "user" | "assistant"; content: string };
+
+/** The chat so far for the host: answered exchanges only, without memory suggestions. */
+export function buildHistory(messages: Message[]): Turn[] {
+  return messages.flatMap((m) =>
+    m.state === "done" && m.answer !== null
+      ? [
+          { role: "user" as const, content: m.prompt },
+          { role: "assistant" as const, content: splitSuggestions(m.answer).text },
+        ]
+      : [],
+  );
+}
+
+// ----- saved data: checked as it's loaded, so old or damaged data can't crash the UI -----
+
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback);
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+export function normalizeMemory(v: unknown): Memory {
+  if (!isObject(v)) return { enabled: true, facts: [], dismissed: [] };
+  const facts = (Array.isArray(v.facts) ? v.facts : [])
+    .filter(isObject)
+    .map((f) => ({ id: str(f.id), text: cleanFact(str(f.text)), at: num(f.at) }))
+    .filter((f) => f.id && f.text)
+    .slice(0, MAX_FACTS);
+  const dismissed = (Array.isArray(v.dismissed) ? v.dismissed : []).filter((d): d is string => typeof d === "string").slice(-MAX_DISMISSED);
+  return { enabled: v.enabled !== false, facts, dismissed };
+}
+
+const STATES = new Set(["running", "done", "error"]);
+
+export function normalizeChats(v: unknown): Chat[] {
+  return (Array.isArray(v) ? v : [])
+    .filter(isObject)
+    .map((c) => ({
+      id: str(c.id),
+      title: str(c.title, "Chat"),
+      messages: (Array.isArray(c.messages) ? c.messages : []).filter(isObject).map(
+        (m): Message => ({
+          prompt: str(m.prompt),
+          state: STATES.has(str(m.state)) ? (m.state as Message["state"]) : "error",
+          answer: typeof m.answer === "string" ? m.answer : null,
+          error: typeof m.error === "string" ? m.error : null,
+          at: num(m.at),
+        }),
+      ),
+    }))
+    .filter((c) => c.id)
+    .slice(0, MAX_CHATS);
 }

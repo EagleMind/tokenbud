@@ -8,6 +8,11 @@
     "bindings": [{ "name": "HOSTS", "class_name": "HostRelay" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HostRelay"] }],
+  // Per-IP request limits, on top of the wrong-password limit each host keeps per caller.
+  "ratelimits": [
+    { "name": "REGISTER_LIMIT", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "SESSION_LIMIT", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
+  ],
   // The web client (built by `npm run build:web` in desktop/) is served at "/".
   // The API goes to the Worker first; everything else is the page.
   "assets": {

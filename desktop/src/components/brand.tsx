@@ -17,14 +17,11 @@ export function Mark({ together = true, className }: { together?: boolean; class
   );
 }
 
-export function Wordmark({ alive, suffix }: { alive?: boolean; suffix?: string }) {
+export function Wordmark({ alive }: { alive?: boolean }) {
   return (
     <div className="flex items-center gap-2.5">
       <Mark together={alive} className="h-7 w-10" />
-      <div className="leading-none">
-        <div className="font-display text-[1.25rem] font-semibold tracking-tight">tokenbud</div>
-        {suffix && <div className="mt-0.5 text-xs text-muted-foreground">{suffix}</div>}
-      </div>
+      <div className="font-display text-[1.25rem] leading-none font-semibold tracking-tight">tokenbud</div>
     </div>
   );
 }

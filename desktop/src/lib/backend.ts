@@ -20,14 +20,17 @@ const SAFETY_POLL_MS = 4000;
  *
  * Bursts of events are coalesced with a short timer. (Not requestAnimationFrame: the
  * webview pauses animation frames while the window is hidden or covered, which would
- * freeze updates until you came back to the window.)
+ * freeze updates until you came back to the window.) A snapshot identical to the last one
+ * doesn't re-render: chats can be long, and re-parsing every answer each poll is wasteful.
  */
 export function useBackendState<T>(getCmd: string, event: string, args?: Record<string, unknown>) {
   const [state, setState] = useState<T | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef(false);
   const again = useRef(false);
-  const argsRef = useRef(args);
+  const last = useRef("");
+  // Arguments by value, so a new object with the same contents doesn't refetch.
+  const argsKey = JSON.stringify(args ?? null);
 
   const fetchNow = useCallback(async () => {
     if (inFlight.current) {
@@ -36,7 +39,12 @@ export function useBackendState<T>(getCmd: string, event: string, args?: Record<
     }
     inFlight.current = true;
     try {
-      setState(await call<T>(getCmd, argsRef.current));
+      const next = await call<T>(getCmd, JSON.parse(argsKey) ?? undefined);
+      const json = JSON.stringify(next);
+      if (json !== last.current) {
+        last.current = json;
+        setState(next);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -46,7 +54,7 @@ export function useBackendState<T>(getCmd: string, event: string, args?: Record<
         fetchNow();
       }
     }
-  }, [getCmd]);
+  }, [getCmd, argsKey]);
 
   const refresh = useCallback(() => {
     if (timer.current) return;
@@ -72,5 +80,5 @@ export function useBackendState<T>(getCmd: string, event: string, args?: Record<
     };
   }, [event, fetchNow, refresh]);
 
-  return { state, refresh };
+  return state;
 }

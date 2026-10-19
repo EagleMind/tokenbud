@@ -1,0 +1,72 @@
+{
+  "_about": "Expected behaviour shared by the Rust client (apps/tokenbud-client/src/memory.rs) and the web client (desktop/src/client/backend.ts). Change both when you change this.",
+  "titles": [
+    {
+      "prompt": "Hello there",
+      "title": "Hello there"
+    },
+    {
+      "prompt": "\n\n   Second line first  \nmore text",
+      "title": "Second line first"
+    },
+    {
+      "prompt": "line one\r\nline two",
+      "title": "line one"
+    },
+    {
+      "prompt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…"
+    },
+    {
+      "prompt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀😀",
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀…"
+    },
+    {
+      "prompt": "",
+      "title": "New chat"
+    }
+  ],
+  "contexts": [
+    {
+      "memory": {
+        "enabled": false,
+        "facts": [
+          {
+            "id": "f1",
+            "text": "Writes Go",
+            "at": 0
+          }
+        ],
+        "dismissed": []
+      },
+      "context": null
+    },
+    {
+      "memory": {
+        "enabled": true,
+        "facts": [],
+        "dismissed": []
+      },
+      "context": "If they share a lasting fact about themselves or a preference worth remembering in future conversations, end your reply with <remember>one short fact, like \"Prefers short answers\"</remember> (at most two). Otherwise don't add it, and never mention these tags."
+    },
+    {
+      "memory": {
+        "enabled": true,
+        "facts": [
+          {
+            "id": "f1",
+            "text": "Writes Go",
+            "at": 0
+          },
+          {
+            "id": "f2",
+            "text": "Prefers short answers",
+            "at": 1
+          }
+        ],
+        "dismissed": []
+      },
+      "context": "What you know about the person asking, from their own saved notes:\n- Writes Go\n- Prefers short answers\n\nIf they share a lasting fact about themselves or a preference worth remembering in future conversations, end your reply with <remember>one short fact, like \"Prefers short answers\"</remember> (at most two). Otherwise don't add it, and never mention these tags."
+    }
+  ]
+}

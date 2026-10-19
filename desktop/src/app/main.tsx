@@ -13,13 +13,13 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HostApp } from "@/host/App";
 import type { SettingsSection } from "@/host/types";
-import { Settings } from "@/settings/Settings";
+import { Settings } from "@/settings";
 import { call, useBackendState } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 // Client mode in the desktop app: the session and chats live in Rust (apps/desktop/src/client.rs).
 const tauri: ClientBackend = {
-  useState: () => useBackendState<ClientState>("client_state", "client-changed").state,
+  useState: () => useBackendState<ClientState>("client_state", "client-changed"),
   connect: (id, password) => call("connect", { id, password }),
   disconnect: () => call("disconnect"),
   clearNotice: () => call("clear_notice"),
@@ -64,13 +64,18 @@ function App() {
     <div className="flex h-full flex-col">
       <header className="flex h-16 shrink-0 items-center justify-between border-b bg-sidebar px-5">
         <Wordmark alive={sharing} />
-        <div className="flex rounded-xl border bg-background p-1" role="tablist" aria-label="Mode">
+        <div className="flex rounded-xl border bg-background p-1" role="group" aria-label="Mode">
           <ModeButton active={mode === "client"} onClick={() => choose("client")}>
             Connect to an agent
           </ModeButton>
           <ModeButton active={mode === "host"} onClick={() => choose("host")}>
             Share my agent
-            {sharing && <span className="size-1.5 rounded-full bg-live" aria-label="sharing" />}
+            {sharing && (
+              <>
+                <span className="size-1.5 rounded-full bg-live" aria-hidden />
+                <span className="sr-only">(sharing)</span>
+              </>
+            )}
           </ModeButton>
         </div>
         {/* Same width as the logo, so the switch sits in the middle. */}
@@ -103,11 +108,11 @@ function App() {
 function ModeButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
-      role="tab"
-      aria-selected={active}
+      aria-pressed={active}
       onClick={onClick}
       className={cn(
         "flex items-center gap-2 rounded-lg px-4 py-1.5 text-sm font-medium transition-colors",
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >

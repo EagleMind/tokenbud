@@ -4,17 +4,17 @@
 //! - an hourly limit on answered prompts (rolling 60 minutes);
 //! - pause while the host is using Claude Code themselves.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Mutex;
 
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokenbud_core::now_ms;
-use tokenbud_core::types::Paused;
+use tokenbud_core::types::{PauseKind, Paused};
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
 const DAY_MS: i64 = 24 * HOUR_MS;
 
-/// One answered prompt, and what Claude Code estimated it cost (the API engine doesn't say).
+/// One answered prompt, and what it cost when the engine says (only Claude Code does).
 #[derive(Debug, Clone, Copy)]
 struct Lent {
     at: i64,
@@ -72,25 +72,53 @@ impl Lending {
 }
 
 pub fn limit_pause(until: i64) -> Paused {
-    Paused { kind: "limit".into(), until: Some(until) }
+    Paused { kind: PauseKind::Limit, until: Some(until) }
 }
 
 pub fn busy_pause() -> Paused {
-    Paused { kind: "busy".into(), until: None }
+    Paused { kind: PauseKind::Busy, until: None }
 }
 
-/// Processes tokenbud started itself (prompts it is answering, engine checks): not "the host using Claude".
-pub static OWN_PIDS: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
+/// Processes tokenbud started itself (prompts it is answering, engine checks): not "the host
+/// using Claude".
+static OWN_PIDS: Mutex<BTreeSet<u32>> = Mutex::new(BTreeSet::new());
 
-pub fn track_own(pid: Option<u32>) {
-    if let Some(pid) = pid {
-        OWN_PIDS.lock().unwrap().get_or_insert_with(HashSet::new).insert(pid);
+/// A process tokenbud started. While it's alive the busy check ignores it. Dropped before
+/// `finished()` (a cancelled or timed-out prompt), it ends the whole process tree: on Windows the
+/// npm `claude.cmd` shim runs cmd.exe, which runs node, and killing only cmd.exe would leave node
+/// answering a prompt nobody is waiting for.
+pub struct OwnProcess {
+    pid: Option<u32>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    done: bool,
+}
+
+impl OwnProcess {
+    pub fn new(pid: Option<u32>) -> Self {
+        if let Some(pid) = pid {
+            OWN_PIDS.lock().unwrap_or_else(|e| e.into_inner()).insert(pid);
+        }
+        Self { pid, done: false }
+    }
+
+    /// The process exited normally; nothing left to kill.
+    pub fn finished(mut self) {
+        self.done = true;
     }
 }
 
-pub fn untrack_own(pid: Option<u32>) {
-    if let (Some(pid), Some(set)) = (pid, OWN_PIDS.lock().unwrap().as_mut()) {
-        set.remove(&pid);
+impl Drop for OwnProcess {
+    fn drop(&mut self) {
+        let Some(pid) = self.pid else { return };
+        OWN_PIDS.lock().unwrap_or_else(|e| e.into_inner()).remove(&pid);
+        #[cfg(windows)]
+        if !self.done {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .status();
+        }
     }
 }
 
@@ -98,8 +126,10 @@ pub fn untrack_own(pid: Option<u32>) {
 /// Counts the `claude` executable, and Node running the npm package. Children of tokenbud's own
 /// processes (the npm `claude.cmd` shim starts cmd.exe, which starts node) don't count.
 pub fn claude_in_use(sys: &mut System) -> bool {
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    let own: HashSet<u32> = OWN_PIDS.lock().unwrap().clone().unwrap_or_default();
+    // Only what's needed to recognise Claude Code: the executable and the command line.
+    let what = ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet).with_cmd(UpdateKind::OnlyIfNotSet);
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, what);
+    let own: BTreeSet<u32> = OWN_PIDS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let started_by_us = |pid: Pid| {
         let mut current = Some(pid);
         for _ in 0..4 {
@@ -120,9 +150,8 @@ pub fn claude_in_use(sys: &mut System) -> bool {
 fn is_claude_code(p: &sysinfo::Process) -> bool {
     let name = p.name().to_string_lossy().to_lowercase();
     let exe = p.exe().map(|e| e.to_string_lossy().to_lowercase().replace('\\', "/")).unwrap_or_default();
-    let desktop_app = exe.contains("/windowsapps/claude_")
-        || exe.contains("/anthropicclaude/")
-        || exe.contains("claude.app/contents/macos/");
+    let desktop_app =
+        exe.contains("/windowsapps/claude_") || exe.contains("/anthropicclaude/") || exe.contains("claude.app/contents/macos/");
     if desktop_app {
         return false;
     }

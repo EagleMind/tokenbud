@@ -3,6 +3,7 @@ name = "tokenbud-core"
 description = "Shared protocol types, relay client and storage helpers for tokenbud"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

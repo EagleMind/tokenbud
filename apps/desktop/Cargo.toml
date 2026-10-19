@@ -3,6 +3,7 @@ name = "tokenbud-desktop"
 description = "tokenbud: share your AI agent, or connect to someone else's"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [[bin]]

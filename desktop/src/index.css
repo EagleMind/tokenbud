@@ -34,7 +34,6 @@
   --periwinkle: #a9afff; /* your circle in the mark */
   --mint: #8edfc0; /* their circle; "live" */
   --live: #1f7f5c; /* text and dots for connected / sharing */
-  --live-soft: #d9f6ea;
   --wait: #f5c84c; /* something is waiting */
   --wait-soft: #fff3c4;
   --wait-ink: #7a5800;
@@ -71,7 +70,6 @@
   --ring: #8c93ff;
 
   --live: #7fd8b5;
-  --live-soft: #1d3a31;
   --wait: #f5c84c;
   --wait-soft: #3a3216;
   --wait-ink: #f3d77a;
@@ -100,8 +98,6 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -114,10 +110,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-periwinkle: var(--periwinkle);
-  --color-mint: var(--mint);
   --color-live: var(--live);
-  --color-live-soft: var(--live-soft);
   --color-wait: var(--wait);
   --color-wait-soft: var(--wait-soft);
   --color-wait-ink: var(--wait-ink);

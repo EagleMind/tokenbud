@@ -1,12 +1,13 @@
 {
   "name": "tokenbud-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev:app": "vite --mode app --port 1420 --strictPort",
     "dev:web": "vite --mode web --port 1422 --strictPort",
     "preview:ui": "vite --port 1430 --strictPort",
+    "test": "vitest run",
     "build": "npm run build:app && npm run build:web",
     "build:app": "tsc --noEmit && vite build --mode app",
     "build:web": "tsc --noEmit && vite build --mode web",
@@ -38,6 +39,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "vitest": "^4.1.12"
   }
 }

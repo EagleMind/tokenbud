@@ -13,11 +13,15 @@ use tokenbud_host::service::{Service, Status};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let service = Service::start(HostConfig::load()?, Arc::new(|line| {
-        if !line.is_empty() {
-            eprintln!("{line}");
-        }
-    }), true)?;
+    let service = Service::start(
+        HostConfig::load()?,
+        Arc::new(|line| {
+            if !line.is_empty() {
+                eprintln!("{line}");
+            }
+        }),
+        true,
+    )?;
     loop {
         tokio::time::sleep(Duration::from_millis(300)).await;
         if service.shared.lock().unwrap().status == Status::Ready {

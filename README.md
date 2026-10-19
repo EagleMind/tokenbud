@@ -8,10 +8,11 @@
 
 Give someone an ID and a password, and they can chat with the model on your computer or your API account. Your keys and your files never leave your machine.
 
+[![CI](https://github.com/EagleMind/tokenbud/actions/workflows/ci.yml/badge.svg)](https://github.com/EagleMind/tokenbud/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-5b63e6)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-23234a)](../../releases/latest)
 [![Built with Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db?logo=tauri&logoColor=white)](https://tauri.app)
-[![Rust](https://img.shields.io/badge/Rust-stable-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/Rust-1.90%2B-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Relay on Cloudflare Workers](https://img.shields.io/badge/relay-Cloudflare%20Workers-f38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com)
 [![Models](https://img.shields.io/badge/models-Ollama%20%7C%20LM%20Studio%20%7C%20OpenAI%20%7C%20Anthropic%20%7C%20more-8edfc0)](#where-answers-come-from)
 
@@ -151,7 +152,7 @@ To make your relay the default in builds you hand out, change `DEFAULT_RELAY_URL
 
 ## Build from source
 
-You need Rust (stable) and Node.js 20 or later. On Linux, also the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+You need Rust 1.90 or later and Node.js 20 or later. On Linux, also the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 cd desktop && npm install && npm run build && cd ..
@@ -161,7 +162,7 @@ cargo build --release
 The app is `target/release/tokenbud`. To make installers, run `npm run bundle` in `desktop/`. For a release on GitHub, push a version tag: the [release workflow](.github/workflows/release.yml) builds Windows, macOS and Linux installers and attaches them to a draft release.
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 ## Using it within the rules
@@ -174,7 +175,10 @@ tokenbud never sees or moves a credential. But model providers decide what their
 
 ## Security and privacy
 
-- The relay stores only SHA-256 hashes of host secrets, passwords and session tokens. Ten wrong passwords in a minute pause connections to that host.
+- The relay stores only hashes: salted PBKDF2 for passwords, SHA-256 for host secrets and session tokens. Ten wrong passwords in a minute from one address lock out that address only, so nobody can block a host's other guests.
+- An unknown ID and a wrong password get the same answer, so IDs can't be probed.
+- Web client tabs keep only their session token, never the password. A refresh resumes the same seat; closing the tab frees it within 45 seconds.
+- The desktop app and the web client have a Content Security Policy, so answers can't load outside images or scripts.
 - The relay sees prompts and answers in transit and deletes finished ones after 10 minutes. Run your own relay if that matters to you.
 - Keys and secrets live in the OS keychain (Windows Credential Manager, macOS Keychain, Linux keyring).
 - With a local model, prompts never leave the two computers and the relay.
@@ -215,12 +219,14 @@ In the UI preview, `?steps=host,settings:model` clicks through to a screen, `?th
 |---|---|---|
 | `POST /v1/hosts` | none | New host: returns `host_id` (9 digits) and `host_secret`. |
 | `GET /v1/hosts/:id/connect` (WebSocket) | host secret | The host's channel. |
-| `POST /v1/hosts/:id/sessions` `{password, name}` | none | Take a seat. Returns `session_token`. 401 wrong password, 409 no free seat, 503 not sharing. |
+| `POST /v1/hosts/:id/sessions` `{password, name}` | none | Take a seat. Returns `session_token`. 401 wrong ID or password, 409 no free seat, 429 too many tries, 503 not sharing. |
 | `DELETE /v1/hosts/:id/sessions` | session | Leave. |
 | `GET /v1/hosts/:id/ping` | session | Keep the seat (every 15 s; 45 s without one ends the session). Returns `online` and `paused`. |
-| `POST /v1/hosts/:id/ask` `{prompt, history, context?}` | session | Send a prompt. `context` carries the guest's memory (at most 10,000 characters). 409 if one is already running, 503 while paused. |
+| `POST /v1/hosts/:id/ask` `{prompt, history, context?}` | session | Send a prompt. `context` carries the guest's memory (at most 10 KB). 409 if one is already running, 503 while paused. |
 | `GET /v1/hosts/:id/jobs/:job?wait=25` | session | The answer, with long-polling. |
 | `GET /health` | none | `{"service": "tokenbud-relay"}` |
+
+Errors are JSON: `{"error": "A sentence for people.", "code": "wrong_password"}`. Decide on `code`, never on the sentence. The codes are `wrong_password`, `rate_limited`, `seats_full`, `busy`, `not_sharing`, `paused`, `session_ended`, `too_large`, `bad_request` and `not_found`. Request bodies are limited to 1.5 MB.
 
 On the WebSocket:
 - **The host sends** `config {password, seats, name}`, `pause {paused}`, `kick {session_id}` and `result {job_id, status, text?, error?}`.
@@ -230,7 +236,7 @@ On the WebSocket:
 
 ## Contributing
 
-tokenbud is a hobby project, maintained when time allows. Issues and pull requests are welcome; small and focused ones are easiest to review. Please run `cargo check --workspace` and `npx tsc --noEmit` in `desktop/` and `relay/` before sending a change.
+tokenbud is a hobby project, maintained when time allows. Issues and pull requests are welcome; small and focused ones are easiest to review. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the checks CI runs, and the code style. Changes are listed in the [changelog](CHANGELOG.md).
 
 ## License
 

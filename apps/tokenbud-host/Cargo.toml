@@ -3,6 +3,7 @@ name = "tokenbud-host"
 description = "Shares your agent through the tokenbud relay: ID, password, seats, and the Claude Code / API engines"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lib]

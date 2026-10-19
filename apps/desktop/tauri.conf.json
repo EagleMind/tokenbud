@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "tokenbud",
-  "version": "0.1.0",
   "identifier": "dev.tokenbud.app",
   "build": {
     "frontendDist": "../../desktop/dist/app",
@@ -30,7 +29,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost",
+      "devCsp": null
     }
   },
   "bundle": {

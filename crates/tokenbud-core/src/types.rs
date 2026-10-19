@@ -22,11 +22,20 @@ pub struct PingResponse {
     pub paused: Option<Paused>,
 }
 
+/// Why a host paused sharing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PauseKind {
+    /// The host's hourly reserve is used up.
+    Limit,
+    /// The host is using Claude Code themselves.
+    Busy,
+}
+
 /// Why and until when a host paused sharing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Paused {
-    /// "limit": the host's hourly reserve is used up; "busy": the host is using Claude Code themselves.
-    pub kind: String,
+    pub kind: PauseKind,
     /// When sharing resumes on its own (for "limit"), in ms since the epoch.
     pub until: Option<i64>,
 }
@@ -36,6 +45,16 @@ pub struct Paused {
 pub enum Role {
     User,
     Assistant,
+}
+
+impl Role {
+    /// The role name chat APIs use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
 }
 
 /// One message of the conversation so far.
@@ -85,34 +104,84 @@ pub struct Session {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RelayToHost {
-    Sessions { sessions: Vec<Session> },
+    Sessions {
+        sessions: Vec<Session>,
+    },
     Job {
         job_id: String,
-        session_id: String,
         name: String,
         prompt: String,
         history: Vec<Turn>,
         #[serde(default)]
         context: Option<String>,
     },
-    Cancel { job_id: String },
+    Cancel {
+        job_id: String,
+    },
+}
+
+/// How a prompt ended, as the host reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResultStatus {
+    Done,
+    Error,
 }
 
 /// Messages the host sends up the WebSocket.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostToRelay {
-    Config { password: String, seats: u32, name: String },
-    Kick { session_id: String },
+    Config {
+        password: String,
+        seats: u32,
+        name: String,
+    },
+    Kick {
+        session_id: String,
+    },
     /// Pause sharing (`paused: Some`) or resume it (`None`). Connected people stay connected.
-    Pause { paused: Option<Paused> },
+    Pause {
+        paused: Option<Paused>,
+    },
     Result {
         job_id: String,
-        /// "done" or "error"
-        status: &'static str,
+        status: ResultStatus,
         #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// These shapes are what relay/src/index.ts sends and expects.
+    #[test]
+    fn matches_the_relay_wire_format() {
+        let job: RelayToHost = serde_json::from_value(json!({
+            "type": "job", "job_id": "j_1", "session_id": "s_1", "name": "Sam",
+            "prompt": "hi", "history": [{"role": "user", "content": "a"}], "context": null
+        }))
+        .unwrap();
+        assert!(matches!(job, RelayToHost::Job { ref job_id, ref history, .. } if job_id == "j_1" && history.len() == 1));
+
+        let result = serde_json::to_value(HostToRelay::Result {
+            job_id: "j_1".into(),
+            status: ResultStatus::Done,
+            text: Some("ok".into()),
+            error: None,
+        })
+        .unwrap();
+        assert_eq!(result, json!({"type": "result", "job_id": "j_1", "status": "done", "text": "ok"}));
+
+        let pause = serde_json::to_value(HostToRelay::Pause { paused: Some(Paused { kind: PauseKind::Limit, until: Some(5) }) }).unwrap();
+        assert_eq!(pause, json!({"type": "pause", "paused": {"kind": "limit", "until": 5}}));
+
+        let ping: PingResponse = serde_json::from_value(json!({"online": true, "paused": {"kind": "busy", "until": null}})).unwrap();
+        assert_eq!(ping.paused.unwrap().kind, PauseKind::Busy);
+    }
 }

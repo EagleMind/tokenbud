@@ -1,8 +1,9 @@
 // tokenbud: one app, two modes. Host mode shares your agent behind an ID and password;
 // client mode connects to someone else's. The window is a React frontend (desktop/src/app).
 //
-// `tokenbud mcp --id <ID> --password <PASSWORD>` runs an MCP server on stdio instead,
-// so your own agent can prompt a shared one.
+// `tokenbud mcp` runs an MCP server on stdio instead, so your own agent can prompt a shared one.
+// Pass the host with TOKENBUD_ID / TOKENBUD_PASSWORD (or --id / --password, which other users of
+// this computer can see in the process list).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod client;
@@ -10,7 +11,7 @@ mod host;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
-use tokenbud_core::{custom_relay, relay_from_env, relay_url, set_custom_relay, RelayClient, DEFAULT_RELAY_URL};
+use tokenbud_core::{custom_relay, normalize_url, relay_from_env, relay_url, set_custom_relay, AllowHttp, RelayClient, DEFAULT_RELAY_URL};
 
 #[tauri::command]
 fn is_sharing(host: State<host::Host>) -> bool {
@@ -42,13 +43,16 @@ async fn set_relay(
     client: State<'_, client::Client>,
     handle: AppHandle,
 ) -> Result<(), String> {
-    let url = url.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty());
-    if let Some(u) = &url {
-        let u = if u.contains("://") { u.clone() } else { format!("https://{u}") };
-        RelayClient::new(&u).map_err(|e| format!("{e:#}"))?.check().await.map_err(|e| format!("{e:#}"))?;
-        set_custom_relay(Some(&u)).map_err(|e| format!("{e:#}"))?;
-    } else {
-        set_custom_relay(None).map_err(|e| format!("{e:#}"))?;
+    let err = |e: anyhow::Error| format!("{e:#}");
+    match url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        Some(u) => {
+            // https, or plain http only for a relay on this computer: the host secret and
+            // passwords travel to it.
+            let u = normalize_url(u, "https", AllowHttp::Loopback).map_err(err)?;
+            RelayClient::new(&u).map_err(err)?.check().await.map_err(err)?;
+            set_custom_relay(Some(&u)).map_err(err)?;
+        }
+        None => set_custom_relay(None).map_err(err)?,
     }
     host.reconnect();
     client::disconnect(client, handle);
@@ -81,8 +85,16 @@ fn main() {
         .manage(host::Host::default())
         .manage(client::Client::load())
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                window.state::<client::Client>().close();
+            // Give the seat back before closing, without freezing the window while the relay answers.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if let Some(seat) = window.state::<client::Client>().take_seat() {
+                    api.prevent_close();
+                    let window = window.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = tokio::time::timeout(client::CLOSE_TIMEOUT, seat.close()).await;
+                        let _ = window.destroy();
+                    });
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
