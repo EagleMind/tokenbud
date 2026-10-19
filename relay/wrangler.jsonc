@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tokenbud-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "HOSTS", "class_name": "HostRelay" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HostRelay"] }],
+  // The web client (built by `npm run build:web` in desktop/) is served at "/".
+  // The API goes to the Worker first; everything else is the page.
+  "assets": {
+    "directory": "../desktop/dist/web",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/v1/*", "/health"]
+  }
+}

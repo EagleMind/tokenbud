@@ -1,0 +1,7 @@
+/target
+relay/node_modules
+relay/.wrangler
+relay/.dev.vars
+desktop/node_modules
+desktop/dist
+apps/*/gen

@@ -1,0 +1,202 @@
+@import "tailwindcss";
+@import "@fontsource-variable/gabarito";
+@import "@fontsource-variable/instrument-sans";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+/* tokenbud: two buds sharing one agent. Flat, opaque colours; no glass, no gradients.
+   Light by default, with a matching dark set below.
+   chalk #F3F4F8 · white #FFFFFF · ink #23234A · periwinkle #5B63E6 · mint #8EDFC0 · lemon #FFE07A */
+:root {
+  --radius: 0.875rem;
+
+  --background: #f3f4f8;
+  --foreground: #23234a;
+  --card: #ffffff;
+  --card-foreground: #23234a;
+  --popover: #ffffff;
+  --popover-foreground: #23234a;
+  --primary: #5b63e6;
+  --primary-foreground: #ffffff;
+  --secondary: #e6e8fb;
+  --secondary-foreground: #23234a;
+  --muted: #eceef5;
+  --muted-foreground: #66698c;
+  --accent: #e6e8fb;
+  --accent-foreground: #23234a;
+  --destructive: #d0463b;
+  --border: #e0e2ee;
+  --input: #d6d9e8;
+  --ring: #5b63e6;
+
+  /* tokenbud roles */
+  --periwinkle: #a9afff; /* your circle in the mark */
+  --mint: #8edfc0; /* their circle; "live" */
+  --live: #1f7f5c; /* text and dots for connected / sharing */
+  --live-soft: #d9f6ea;
+  --wait: #f5c84c; /* something is waiting */
+  --wait-soft: #fff3c4;
+  --wait-ink: #7a5800;
+  --sidebar: #e9ebf4;
+  --bubble: #e3e5ff; /* your messages */
+  --bubble-foreground: #23234a;
+  --id-card: #e3e5ff; /* the host's ID and password card */
+  --error-soft: #fde6e3;
+  --primary-hover: #4a52d4;
+  --secondary-hover: #d9dcf8;
+  --destructive-hover: #b93c32;
+  --offline: #c9ccdc;
+}
+
+/* Deep indigo night. The mark keeps its colours; its overlap uses the foreground, so it turns light. */
+.dark {
+  --background: #16172a;
+  --foreground: #e8e9f6;
+  --card: #1f2139;
+  --card-foreground: #e8e9f6;
+  --popover: #1f2139;
+  --popover-foreground: #e8e9f6;
+  --primary: #8c93ff;
+  --primary-foreground: #16172a;
+  --secondary: #272a47;
+  --secondary-foreground: #e8e9f6;
+  --muted: #232643;
+  --muted-foreground: #9c9fc0;
+  --accent: #272a47;
+  --accent-foreground: #e8e9f6;
+  --destructive: #f07a6e;
+  --border: #2c2f4b;
+  --input: #34385a;
+  --ring: #8c93ff;
+
+  --live: #7fd8b5;
+  --live-soft: #1d3a31;
+  --wait: #f5c84c;
+  --wait-soft: #3a3216;
+  --wait-ink: #f3d77a;
+  --sidebar: #121323;
+  --bubble: #2e3266;
+  --bubble-foreground: #e8e9f6;
+  --id-card: #2a2d5c;
+  --error-soft: #3d2124;
+  --primary-hover: #a3a9ff;
+  --secondary-hover: #31355a;
+  --destructive-hover: #f39488;
+  --offline: #4a4e70;
+}
+
+@theme inline {
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Gabarito Variable", "Instrument Sans Variable", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-periwinkle: var(--periwinkle);
+  --color-mint: var(--mint);
+  --color-live: var(--live);
+  --color-live-soft: var(--live-soft);
+  --color-wait: var(--wait);
+  --color-wait-soft: var(--wait-soft);
+  --color-wait-ink: var(--wait-ink);
+  --color-sidebar: var(--sidebar);
+  --color-bubble: var(--bubble);
+  --color-bubble-foreground: var(--bubble-foreground);
+  --color-id-card: var(--id-card);
+  --color-error-soft: var(--error-soft);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary-hover: var(--secondary-hover);
+  --color-destructive-hover: var(--destructive-hover);
+  --color-offline: var(--offline);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* Content people may want to copy stays selectable. */
+  .selectable,
+  textarea,
+  input,
+  .prose-answer {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+}
+
+/* Quiet scrollbars that match the palette. */
+* { scrollbar-width: thin; scrollbar-color: var(--offline) transparent; }
+
+/* The one ambient animation: the two circles of the mark slide together when you connect or share. */
+.mark-a, .mark-b, .mark-overlap { transition: transform 700ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 500ms ease; }
+.mark-apart .mark-a { transform: translateX(-3px); }
+.mark-apart .mark-b { transform: translateX(3px); }
+.mark-apart .mark-overlap { opacity: 0; }
+
+@keyframes typing {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+.typing-dot { animation: typing 1.2s infinite ease-in-out; }
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dot { animation: none; }
+  .mark-a, .mark-b, .mark-overlap { transition: none; }
+}
+
+/* Answers rendered from Markdown. */
+.prose-answer { @apply text-[0.9375rem] leading-relaxed; }
+.prose-answer > * + * { @apply mt-3; }
+.prose-answer h1, .prose-answer h2, .prose-answer h3 { @apply font-display font-semibold mt-5; }
+.prose-answer h1 { @apply text-xl; }
+.prose-answer h2 { @apply text-lg; }
+.prose-answer h3 { @apply text-base; }
+.prose-answer ul { @apply list-disc pl-5 space-y-1; }
+.prose-answer ol { @apply list-decimal pl-5 space-y-1; }
+.prose-answer a { @apply text-primary underline underline-offset-2; }
+.prose-answer code { @apply font-mono text-[0.85em] rounded bg-muted px-1 py-0.5; }
+.prose-answer pre { @apply rounded-lg bg-muted p-3 overflow-x-auto text-[0.85rem]; }
+.prose-answer pre code { @apply bg-transparent p-0; }
+.prose-answer blockquote { @apply border-l-2 border-primary/40 pl-3 text-muted-foreground; }
+.prose-answer table { @apply w-full text-sm border-collapse; }
+.prose-answer th, .prose-answer td { @apply border border-border px-2 py-1 text-left; }

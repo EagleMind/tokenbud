@@ -1,0 +1,29 @@
+[package]
+name = "tokenbud-desktop"
+description = "tokenbud: share your AI agent, or connect to someone else's"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tokenbud"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+tokenbud-core.workspace = true
+tokenbud-host = { path = "../tokenbud-host" }
+tokenbud-client = { path = "../tokenbud-client" }
+tauri.workspace = true
+tauri-plugin-window-state = "2"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+
+[features]
+# Serve the bundled frontend (desktop/dist/app). `npm run app` turns this off to use Vite's dev server.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

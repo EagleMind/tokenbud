@@ -1,0 +1,43 @@
+{
+  "name": "tokenbud-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:app": "vite --mode app --port 1420 --strictPort",
+    "dev:web": "vite --mode web --port 1422 --strictPort",
+    "preview:ui": "vite --port 1430 --strictPort",
+    "build": "npm run build:app && npm run build:web",
+    "build:app": "tsc --noEmit && vite build --mode app",
+    "build:web": "tsc --noEmit && vite build --mode web",
+    "app": "cd ../apps/desktop && tauri dev -- --no-default-features",
+    "bundle": "cd ../apps/desktop && tauri build"
+  },
+  "dependencies": {
+    "@fontsource-variable/gabarito": "^5.3.0",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@tauri-apps/api": "^2.12.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.59.0",
+    "radix-ui": "^1.8.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.7.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.12.3",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9",
+    "vite": "^8.3.4"
+  }
+}
