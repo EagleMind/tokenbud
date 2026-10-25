@@ -100,8 +100,8 @@ struct Ctx {
 }
 
 impl Service {
-    /// Start the service. With `share` it shares right away (like TeamViewer, you're reachable as soon
-    /// as host mode is open); without, it waits stopped (e.g. when only the settings were opened).
+    /// Start the service. With `share` it shares right away (you're reachable as soon as host mode
+    /// is open); without, it waits stopped (e.g. when only the settings were opened).
     pub fn start(config: HostConfig, notify: Notify, share: bool) -> Result<Self> {
         let password = config::password()?;
         let (tx, rx) = mpsc::unbounded_channel();

@@ -1,6 +1,6 @@
 // tokenbud relay (and host of the web client, see wrangler.jsonc): passes prompts from people
-// connected to a host on to the host's agent, and answers back. Works like TeamViewer: a host has
-// an ID and a password; anyone with both can connect, as long as the host has a free seat.
+// connected to a host on to the host's agent, and answers back. A host has an ID and a password;
+// anyone with both can connect, as long as the host has a free seat.
 //
 // One Durable Object per host. The host app keeps an outbound WebSocket open to it; people
 // connect over HTTP. The relay stores only hashes of secrets, and keeps prompts just long enough
@@ -553,7 +553,7 @@ export class HostRelay extends DurableObject<Env> {
         const same = stored !== null && (await verifyPassword(msg.password, stored));
         if (!same || isLegacyHash(stored)) this.setMeta("password_hash", await hashPassword(msg.password));
         this.setMeta("password_hash_ready", "1");
-        // A new password ends everyone's session, like TeamViewer.
+        // A new password ends everyone's session: the old one may have reached people it shouldn't.
         if (!same) this.endSessions(this.allSessionIds(), "The host changed the password.");
       }
       if (typeof msg.seats === "number") this.setMeta("seats", String(Math.min(Math.max(Math.floor(msg.seats), 1), MAX_SEATS)));
