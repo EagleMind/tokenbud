@@ -59,6 +59,21 @@ describe("sessions", () => {
     expect((await openSession(hostId, PASSWORD, "198.51.100.8")).status).toBe(201);
   });
 
+  it("spends the same password work on an unknown ID", async () => {
+    const { hostId } = await startHost();
+    const t0 = performance.now();
+    await openSession("123456789", PASSWORD, "198.51.100.10");
+    const unknownMs = performance.now() - t0;
+    const t1 = performance.now();
+    await openSession(hostId, "wrongpass", "198.51.100.11");
+    const knownMs = performance.now() - t1;
+    // PBKDF2 is 100,000 iterations, tens of milliseconds. Before the fix the
+    // unregistered branch returned in about a millisecond. A lower bound is
+    // less flaky on CI than comparing the two timings directly.
+    expect(unknownMs).toBeGreaterThan(5);
+    expect(knownMs).toBeGreaterThan(5);
+  });
+
   it("answers an unknown ID exactly like a wrong password", async () => {
     const unknown = await openSession("123456789", PASSWORD);
     expect(unknown.status).toBe(401);

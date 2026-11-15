@@ -38,6 +38,8 @@ export interface Env {
   /** Per-IP limits (wrangler.jsonc "ratelimits"); absent in tests and older deployments. */
   REGISTER_LIMIT?: RateLimit;
   SESSION_LIMIT?: RateLimit;
+  /** Per-IP cap on session attempts, so probing unknown IDs is not free. */
+  PROBE_LIMIT?: RateLimit;
 }
 
 // Sizes are UTF-8 bytes: what storage and WebSocket messages count.
@@ -50,6 +52,11 @@ const MAX_RESULT_BYTES = 1_000_000;
 const MAX_ERROR_BYTES = 2_000;
 const MAX_NAME_CHARS = 64;
 const MAX_SEATS = 50;
+// A fixed PBKDF2 hash used to spend the same work on an ID that does not exist.
+// Without it the unregistered branch returns before hashing, and response time
+// reveals which IDs are live (see the timing test in relay/test/relay.test.ts).
+const DECOY_PASSWORD_HASH =
+  "pbkdf2$00112233445566778899aabbccddeeff$0c91141ca915ae1826fb2ec7eabf6d6968db2e00f15ed08e448b646ee3f2a49e";
 const MIN_PASSWORD_CHARS = 8;
 const MAX_WAIT_MS = 50_000;
 // A session ends when its app stops checking in for this long.
@@ -143,6 +150,7 @@ export default {
       // POST /sessions {password, name} -> start a session (takes a seat). An ID that isn't a
       // host gets the same answer as a wrong password, so IDs can't be probed.
       if (rest === "sessions" && method === "POST") {
+        if (!(await allowed(env.PROBE_LIMIT, `probe:${callerIp(request)}`))) return rateLimited();
         if (!(await allowed(env.SESSION_LIMIT, `session:${callerIp(request)}`))) return rateLimited();
         if (!HOST_ID_RE.test(hostId)) return errorResponse(401, "wrong_password", "Wrong ID or password.");
         const body = await readJson(request);
@@ -361,7 +369,12 @@ export class HostRelay extends DurableObject<Env> {
 
   async openSession(password: string, name: string, ip: string): Promise<Result<unknown>> {
     const wrong = fail(401, "wrong_password", "Wrong ID or password.");
-    if (!this.registered) return wrong;
+    if (!this.registered) {
+      // Equal work for an ID that does not exist. Returning here without
+      // hashing made response time an existence oracle.
+      await verifyPassword(password, DECOY_PASSWORD_HASH);
+      return wrong;
+    }
     const now = Date.now();
     if (this.recentFailures(ip, now) >= MAX_FAILED_LOGINS) {
       return fail(429, "rate_limited", "Too many wrong passwords. Wait a minute and try again.");
